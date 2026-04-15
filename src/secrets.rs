@@ -678,9 +678,11 @@ fn write_registered_api_profiles(profiles: &std::collections::BTreeSet<String>) 
 mod tests {
     use tempfile::tempdir;
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    use super::{keychain_backend_is_persistent, keychain_backend_label};
     use super::{
-        StoredTelegramCredentials, TelegramCredentials, keychain_backend_is_persistent,
-        keychain_backend_label, read_local_credentials_file, write_local_credentials_file,
+        StoredTelegramCredentials, TelegramCredentials, read_local_credentials_file,
+        write_local_credentials_file,
     };
 
     #[test]
