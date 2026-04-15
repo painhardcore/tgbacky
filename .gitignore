@@ -1,0 +1,28 @@
+/target
+
+# Local env files
+/.env
+/.env.*
+!/.env.example
+/.envBack
+
+# macOS
+/.DS_Store
+.DS_Store
+*.swp
+*.swo
+
+# Local working data
+/data
+/downloads
+/run-artifacts
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.part
+credentials.json
+
+# Temporary local exports / experiments
+/tmp
+/dist

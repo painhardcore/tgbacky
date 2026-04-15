@@ -1,0 +1,55 @@
+[package]
+name = "tgbacky"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Local-first Telegram media backup CLI with durable resume state and conservative pacing"
+license = "MIT"
+readme = "README.md"
+build = "build.rs"
+keywords = ["telegram", "backup", "media", "cli", "archival"]
+categories = ["command-line-utilities", "filesystem"]
+
+[dependencies]
+async-trait = "0.1.89"
+chrono = { version = "0.4.42", features = ["serde"] }
+clap = { version = "4.5.48", features = ["derive"] }
+directories = "5.0.1"
+dotenvy = "0.15.7"
+futures-util = "0.3.31"
+governor = "0.10.4"
+grammers-client = "0.9.0"
+grammers-mtsender = "0.9.0"
+grammers-session = "0.9.0"
+hex = "0.4.3"
+indicatif = "0.17.11"
+mime_guess = "2.0.5"
+rand = "0.8.5"
+rpassword = "7.4.0"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+thiserror = "2.0.17"
+tokio = { version = "1.47.1", features = ["fs", "io-util", "macros", "rt", "signal", "sync", "time"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+url = "2.5.7"
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native"] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))'.dependencies]
+keyring = "3.6.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
