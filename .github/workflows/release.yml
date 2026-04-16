@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -14,8 +19,17 @@ jobs:
     name: Release preflight
     runs-on: ubuntu-latest
     steps:
+      - name: Validate release tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          if [[ ! "${{ inputs.tag }}" =~ ^v[0-9] ]]; then
+            echo "Release tag must start with v followed by a digit, for example v0.1.0" >&2
+            exit 1
+          fi
+
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
@@ -62,7 +76,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
@@ -83,7 +97,11 @@ jobs:
       - name: Prepare package directory
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_TAG="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            RELEASE_TAG="${{ inputs.tag }}"
+          fi
+          VERSION="${RELEASE_TAG#v}"
           PACKAGE_DIR="dist/tgbacky-v${VERSION}-${{ matrix.name }}"
           mkdir -p "$PACKAGE_DIR"
           cp README.md LICENSE env.example "$PACKAGE_DIR"/
@@ -114,7 +132,7 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Download build artifacts
@@ -132,6 +150,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: |
             dist/*.tar.gz
             dist/*.zip
