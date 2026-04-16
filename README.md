@@ -138,6 +138,10 @@ tgbacky verify --chat @example --out ./downloads --deep
 tgbacky verify --chat -1001234567890 --out ./downloads --deep --json
 ```
 
+Verify defaults to a fast local check: tracked status, missing files,
+unreadable paths, and file sizes. Add `--deep` to also read file bytes and
+check SHA-256 hashes when available. Add `--json` for script-friendly output.
+
 Check local setup:
 
 ```bash
@@ -209,6 +213,18 @@ tgbacky export \
   --download-stall-timeout-secs 120 \
   --verbose-progress
 ```
+
+## Large Downloads and Telegram Rate Limits
+
+Telegram can rate limit very large exports. This is normal, especially when one
+chat contains tens or hundreds of gigabytes of media.
+
+For example, downloading about 120G from one conversation can trigger Telegram
+RPC errors such as `FLOOD_PREMIUM_WAIT_X`. `X` is the number of seconds Telegram
+asks the client to wait before continuing. `tgbacky` treats these like normal
+flood waits, respects the delay, and continues the download afterward. This
+protects the account and avoids corrupting partial files, but very large exports
+can take a while.
 
 ## Where Files Go
 
