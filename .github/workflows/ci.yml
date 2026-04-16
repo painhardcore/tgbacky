@@ -24,6 +24,9 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cargo-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
 
       - name: Format
         run: cargo fmt --all --check
