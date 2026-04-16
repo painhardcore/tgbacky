@@ -1378,10 +1378,8 @@ async fn handle_download_result<G: TelegramGateway>(
                 counters.failed = counters.failed.saturating_sub(1);
             }
         }
-        crate::types::MediaStatus::Failed => {
-            if !capture_retry_jobs || event.retry_job.is_none() {
-                counters.failed += 1;
-            }
+        crate::types::MediaStatus::Failed if !capture_retry_jobs || event.retry_job.is_none() => {
+            counters.failed += 1;
         }
         _ => {}
     }
