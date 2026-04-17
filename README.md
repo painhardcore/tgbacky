@@ -21,7 +21,69 @@ PNG, video to MP4, or anything like that. It saves Telegram bytes as-is.
 Not here yet: bot tokens, invite links, stickers, profile photos, contacts, and
 multi-chat batch export.
 
-## Install
+## Installation
+
+Most users should install a release binary. You do not need Rust or Cargo for
+this.
+
+1. Open
+   [GitHub Releases](https://github.com/painhardcore/TgMediaBacky/releases).
+2. Download the archive for your system:
+
+```text
+Linux:               tgbacky-v0.1.0-linux-x86_64.tar.gz
+macOS Apple Silicon: tgbacky-v0.1.0-macos-aarch64.tar.gz
+macOS Intel:         tgbacky-v0.1.0-macos-x86_64.tar.gz
+Windows:             tgbacky-v0.1.0-windows-x86_64.zip
+```
+
+3. Optional but recommended: verify the download if `SHA256SUMS.txt` is attached to the release. You can't trust anyone online.
+4. Extract the archive.
+5. Move the binary somewhere in your `PATH`.
+
+Linux:
+
+```bash
+tar -xzf tgbacky-v0.1.0-linux-x86_64.tar.gz
+cd tgbacky-v0.1.0-linux-x86_64
+chmod +x tgbacky
+sudo mv tgbacky /usr/local/bin/tgbacky
+tgbacky --version
+```
+
+macOS Apple Silicon:
+
+```bash
+tar -xzf tgbacky-v0.1.0-macos-aarch64.tar.gz
+cd tgbacky-v0.1.0-macos-aarch64
+chmod +x tgbacky
+xattr -d com.apple.quarantine ./tgbacky
+sudo mv tgbacky /usr/local/bin/tgbacky
+tgbacky --version
+```
+
+For Intel Macs, replace `macos-aarch64` with `macos-x86_64`. If macOS blocks
+the downloaded binary, allow it from **System Settings > Privacy & Security**,
+or run this before moving it to `/usr/local/bin`:
+
+Windows PowerShell:
+
+```powershell
+Expand-Archive .\tgbacky-v0.1.0-windows-x86_64.zip
+cd .\tgbacky-v0.1.0-windows-x86_64\tgbacky-v0.1.0-windows-x86_64
+.\tgbacky.exe --version
+```
+
+For regular use on Windows, move `tgbacky.exe` to a folder that is already in
+your `Path`, or add the extracted folder to your user `Path`.
+
+Release archives contain the `tgbacky` binary, `README.md`, `LICENSE`, and
+`env.example`.
+
+### Build from Source
+
+Use this only if there is no release binary for your system, or if you want to
+test local changes. Install Rust 1.85 or newer first.
 
 From this checkout:
 
@@ -36,9 +98,6 @@ Or build without installing:
 cargo build --release
 ./target/release/tgbacky --version
 ```
-
-Release archives contain `tgbacky`, `README.md`, `LICENSE`, and `env.example`.
-If `SHA256SUMS.txt` exists, check it before running downloaded binaries.
 
 ## First Use
 
