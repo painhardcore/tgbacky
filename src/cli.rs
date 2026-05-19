@@ -182,7 +182,7 @@ struct ChatsResetArgs {
     telegram_api: TelegramApiArgs,
     #[command(flatten)]
     runtime: RuntimeTuningArgs,
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     chat: String,
     #[arg(long)]
     keep_files: bool,
@@ -240,7 +240,7 @@ struct VerifyArgs {
     telegram_api: TelegramApiArgs,
     #[command(flatten)]
     runtime: RuntimeTuningArgs,
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     chat: String,
     #[arg(long)]
     out: Option<PathBuf>,
@@ -260,7 +260,7 @@ struct ExportArgs {
     runtime: RuntimeTuningArgs,
     #[command(subcommand)]
     command: Option<ExportSubcommand>,
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     chat: Option<String>,
     #[arg(long)]
     out: Option<PathBuf>,
@@ -297,7 +297,7 @@ enum ExportSubcommand {
 
 #[derive(Debug, Args)]
 struct ExportPlanArgs {
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     chat: String,
     #[arg(long)]
     out: Option<PathBuf>,
@@ -1104,9 +1104,10 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
+    use clap::Parser;
     use tracing_subscriber::filter::LevelFilter;
 
-    use super::resolve_media_filter;
+    use super::{Cli, Command, ExportSubcommand, resolve_media_filter};
     use crate::config::{AppConfig, CredentialSource, DownloadConcurrencyOrigin, ProfileSource};
     use crate::types::{FilenameMode, MediaKind};
 
@@ -1155,5 +1156,174 @@ mod tests {
         assert!(!filter.contains(&MediaKind::Document));
         assert!(!filter.contains(&MediaKind::Audio));
         assert!(filter.contains(&MediaKind::Photo));
+    }
+
+    #[test]
+    fn export_accepts_negative_numeric_chat_id() {
+        let cli = Cli::try_parse_from([
+            "tgbacky",
+            "export",
+            "--chat",
+            "-1001406612170",
+            "--out",
+            "downloads",
+        ])
+        .expect("parse export args");
+
+        let Command::Export(args) = cli.command else {
+            panic!("expected export command");
+        };
+        assert_eq!(args.chat.as_deref(), Some("-1001406612170"));
+    }
+
+    #[test]
+    fn export_keeps_options_after_negative_numeric_chat_id() {
+        let cli = Cli::try_parse_from([
+            "tgbacky",
+            "export",
+            "--chat",
+            "-1001406612170",
+            "--workers",
+            "1",
+            "--out",
+            "downloads",
+            "--json-report",
+        ])
+        .expect("parse export args");
+
+        let Command::Export(args) = cli.command else {
+            panic!("expected export command");
+        };
+        assert_eq!(args.chat.as_deref(), Some("-1001406612170"));
+        assert_eq!(args.workers, Some(1));
+        assert_eq!(args.out, Some(PathBuf::from("downloads")));
+        assert!(args.json_report);
+    }
+
+    #[test]
+    fn export_rejects_missing_chat_value_without_swallowing_next_flag() {
+        assert!(
+            Cli::try_parse_from(["tgbacky", "export", "--chat", "--out", "downloads"]).is_err()
+        );
+    }
+
+    #[test]
+    fn export_still_accepts_username_chat() {
+        let cli = Cli::try_parse_from(["tgbacky", "export", "--chat", "@example"])
+            .expect("parse export args");
+
+        let Command::Export(args) = cli.command else {
+            panic!("expected export command");
+        };
+        assert_eq!(args.chat.as_deref(), Some("@example"));
+    }
+
+    #[test]
+    fn export_still_accepts_exact_title_chat() {
+        let cli = Cli::try_parse_from(["tgbacky", "export", "--chat", "Family Photos"])
+            .expect("parse export args");
+
+        let Command::Export(args) = cli.command else {
+            panic!("expected export command");
+        };
+        assert_eq!(args.chat.as_deref(), Some("Family Photos"));
+    }
+
+    #[test]
+    fn export_plan_accepts_negative_numeric_chat_id() {
+        let cli = Cli::try_parse_from([
+            "tgbacky",
+            "export",
+            "plan",
+            "--chat",
+            "-1001406612170",
+            "--out",
+            "downloads",
+        ])
+        .expect("parse export plan args");
+
+        let Command::Export(args) = cli.command else {
+            panic!("expected export command");
+        };
+        let Some(ExportSubcommand::Plan(plan_args)) = args.command else {
+            panic!("expected export plan command");
+        };
+        assert_eq!(plan_args.chat, "-1001406612170");
+    }
+
+    #[test]
+    fn export_plan_keeps_flags_after_negative_numeric_chat_id() {
+        let cli = Cli::try_parse_from([
+            "tgbacky",
+            "export",
+            "plan",
+            "--chat",
+            "-1001406612170",
+            "--out",
+            "downloads",
+            "--save-queue",
+        ])
+        .expect("parse export plan args");
+
+        let Command::Export(args) = cli.command else {
+            panic!("expected export command");
+        };
+        let Some(ExportSubcommand::Plan(plan_args)) = args.command else {
+            panic!("expected export plan command");
+        };
+        assert_eq!(plan_args.chat, "-1001406612170");
+        assert_eq!(plan_args.out, Some(PathBuf::from("downloads")));
+        assert!(plan_args.save_queue);
+    }
+
+    #[test]
+    fn verify_accepts_negative_numeric_chat_id() {
+        let cli = Cli::try_parse_from([
+            "tgbacky",
+            "verify",
+            "--chat",
+            "-1001406612170",
+            "--out",
+            "downloads",
+        ])
+        .expect("parse verify args");
+
+        let Command::Verify(args) = cli.command else {
+            panic!("expected verify command");
+        };
+        assert_eq!(args.chat, "-1001406612170");
+    }
+
+    #[test]
+    fn verify_rejects_missing_chat_value_without_swallowing_next_flag() {
+        assert!(
+            Cli::try_parse_from(["tgbacky", "verify", "--chat", "--out", "downloads"]).is_err()
+        );
+    }
+
+    #[test]
+    fn chats_reset_accepts_negative_numeric_chat_id() {
+        let cli = Cli::try_parse_from([
+            "tgbacky",
+            "chats",
+            "reset",
+            "--chat",
+            "-1001406612170",
+            "--yes",
+        ])
+        .expect("parse chats reset args");
+
+        let Command::Chats {
+            command: super::ChatsCommand::Reset(args),
+        } = cli.command
+        else {
+            panic!("expected chats reset command");
+        };
+        assert_eq!(args.chat, "-1001406612170");
+    }
+
+    #[test]
+    fn chats_reset_rejects_missing_chat_value_without_swallowing_next_flag() {
+        assert!(Cli::try_parse_from(["tgbacky", "chats", "reset", "--chat", "--yes"]).is_err());
     }
 }
