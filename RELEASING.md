@@ -36,8 +36,8 @@ Update:
 Tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 ## GitHub Release
@@ -53,4 +53,3 @@ Pushing `v*` tag does this:
 - include `README.md`, `LICENSE`, and `env.example`
 - write `SHA256SUMS.txt`
 - publish GitHub Release
-

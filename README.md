@@ -31,10 +31,10 @@ this.
 2. Download the archive for your system:
 
 ```text
-Linux:               tgbacky-v0.1.0-linux-x86_64.tar.gz
-macOS Apple Silicon: tgbacky-v0.1.0-macos-aarch64.tar.gz
-macOS Intel:         tgbacky-v0.1.0-macos-x86_64.tar.gz
-Windows:             tgbacky-v0.1.0-windows-x86_64.zip
+Linux:               tgbacky-v0.1.2-linux-x86_64.tar.gz
+macOS Apple Silicon: tgbacky-v0.1.2-macos-aarch64.tar.gz
+macOS Intel:         tgbacky-v0.1.2-macos-x86_64.tar.gz
+Windows:             tgbacky-v0.1.2-windows-x86_64.zip
 ```
 
 3. Optional but recommended: verify the download if `SHA256SUMS.txt` is attached to the release. You can't trust anyone online.
@@ -44,8 +44,8 @@ Windows:             tgbacky-v0.1.0-windows-x86_64.zip
 Linux:
 
 ```bash
-tar -xzf tgbacky-v0.1.0-linux-x86_64.tar.gz
-cd tgbacky-v0.1.0-linux-x86_64
+tar -xzf tgbacky-v0.1.2-linux-x86_64.tar.gz
+cd tgbacky-v0.1.2-linux-x86_64
 chmod +x tgbacky
 sudo mv tgbacky /usr/local/bin/tgbacky
 tgbacky --version
@@ -54,8 +54,8 @@ tgbacky --version
 macOS Apple Silicon:
 
 ```bash
-tar -xzf tgbacky-v0.1.0-macos-aarch64.tar.gz
-cd tgbacky-v0.1.0-macos-aarch64
+tar -xzf tgbacky-v0.1.2-macos-aarch64.tar.gz
+cd tgbacky-v0.1.2-macos-aarch64
 chmod +x tgbacky
 xattr -d com.apple.quarantine ./tgbacky
 sudo mv tgbacky /usr/local/bin/tgbacky
@@ -69,8 +69,8 @@ or run this before moving it to `/usr/local/bin`:
 Windows PowerShell:
 
 ```powershell
-Expand-Archive .\tgbacky-v0.1.0-windows-x86_64.zip
-cd .\tgbacky-v0.1.0-windows-x86_64\tgbacky-v0.1.0-windows-x86_64
+Expand-Archive .\tgbacky-v0.1.2-windows-x86_64.zip
+cd .\tgbacky-v0.1.2-windows-x86_64\tgbacky-v0.1.2-windows-x86_64
 .\tgbacky.exe --version
 ```
 

@@ -2,6 +2,15 @@
 
 Plain release notes for `tgbacky`.
 
+## 0.1.2
+
+- resolve numeric Telegram chat IDs from the existing session peer cache before falling back to a full dialog scan
+- fall back to dialog scanning when a cached numeric peer cannot be resolved
+
+## 0.1.1
+
+- allow negative Telegram chat IDs in CLI parsing
+
 ## 0.1.0
 
 First public release.
