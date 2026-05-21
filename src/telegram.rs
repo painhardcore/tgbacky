@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use grammers_client::client::{ClientConfiguration, LoginToken, NoRetries, PasswordToken};
 use grammers_client::{Client, InvocationError};
 use grammers_mtsender::SenderPool;
+use grammers_session::Session;
 use grammers_session::storages::SqliteSession;
 use grammers_session::types::PeerRef;
 use tokio::sync::Mutex;
@@ -71,6 +72,7 @@ pub trait TelegramGateway {
 
 pub struct RealTelegramGateway {
     config: AppConfig,
+    session: Arc<dyn Session>,
     client: Client,
     pending_auth: Mutex<Option<PendingAuth>>,
     pacer: Pacer,
@@ -103,6 +105,7 @@ impl RealTelegramGateway {
 
         Ok(Self {
             config: config.clone(),
+            session,
             client,
             pending_auth: Mutex::new(None),
             pacer: Pacer::new(

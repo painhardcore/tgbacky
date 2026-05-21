@@ -9,7 +9,8 @@ use grammers_client::InvocationError;
 use grammers_client::media::Media;
 use grammers_client::message::Message;
 use grammers_client::peer::Peer;
-use grammers_session::types::PeerRef;
+use grammers_session::types::{PeerId, PeerRef};
+use tracing::debug;
 
 pub(super) fn chat_summary_from_peer(peer: &Peer, handle: PeerRef) -> ChatSummary<PeerRef> {
     let kind = match peer {
@@ -134,6 +135,26 @@ pub(super) async fn resolve_chat_impl(
         return Ok(chat_summary_from_peer(&peer, handle));
     }
 
+    if let Some(peer_id) = parse_bot_api_dialog_id(query)
+        && let Some(handle) = gateway.session.peer_ref(peer_id).await
+    {
+        match gateway
+            .invoke_with_policy(PaceBucket::Request, "resolve numeric chat", || {
+                gateway.client.resolve_peer(handle)
+            })
+            .await
+        {
+            Ok(peer) => return Ok(chat_summary_from_peer(&peer, handle)),
+            Err(error) => {
+                debug!(
+                    chat = query,
+                    %error,
+                    "cached numeric chat resolution failed; falling back to dialog scan"
+                );
+            }
+        }
+    }
+
     let chats = list_chats_impl(gateway).await?;
     if let Ok(dialog_id) = query.trim().parse::<i64>() {
         return chats
@@ -155,6 +176,21 @@ pub(super) async fn resolve_chat_impl(
             "multiple chats share the title `{query}`; use @username or numeric id"
         ))),
     }
+}
+
+fn parse_bot_api_dialog_id(query: &str) -> Option<PeerId> {
+    let dialog_id = query.trim().parse::<i64>().ok()?;
+    if dialog_id > 0 {
+        return PeerId::user(dialog_id);
+    }
+    if dialog_id < -1_000_000_000_000 {
+        let bare_id = dialog_id.checked_neg()?.checked_sub(1_000_000_000_000)?;
+        return PeerId::channel(bare_id);
+    }
+    if dialog_id < 0 {
+        return PeerId::chat(dialog_id.checked_neg()?);
+    }
+    None
 }
 
 pub(super) async fn fetch_history_batch_impl(
@@ -217,4 +253,28 @@ pub(super) async fn fetch_messages_by_ids_impl(
         .flatten()
         .map(map_message)
         .collect::<Vec<_>>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_channel_bot_api_dialog_id() {
+        let peer_id = parse_bot_api_dialog_id("-1001406612170").expect("channel id");
+
+        assert_eq!(peer_id.bot_api_dialog_id(), -1001406612170);
+    }
+
+    #[test]
+    fn parses_small_group_bot_api_dialog_id() {
+        let peer_id = parse_bot_api_dialog_id("-12345").expect("small group id");
+
+        assert_eq!(peer_id.bot_api_dialog_id(), -12345);
+    }
+
+    #[test]
+    fn ignores_non_numeric_chat_query() {
+        assert!(parse_bot_api_dialog_id("dreamteam").is_none());
+    }
 }
