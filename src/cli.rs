@@ -260,8 +260,8 @@ struct ExportArgs {
     runtime: RuntimeTuningArgs,
     #[command(subcommand)]
     command: Option<ExportSubcommand>,
-    #[arg(long, allow_negative_numbers = true)]
-    chat: Option<String>,
+    #[arg(long, allow_negative_numbers = true, action = clap::ArgAction::Append)]
+    chat: Vec<String>,
     #[arg(long)]
     out: Option<PathBuf>,
     #[arg(long, hide = true)]
@@ -476,11 +476,7 @@ pub async fn run() -> Result<()> {
             commands::export::run(
                 &config,
                 commands::export::ExportCommand {
-                    chat: args.chat.ok_or_else(|| {
-                        AppError::InvalidArgument(
-                            "export requires --chat unless using `export plan`".to_string(),
-                        )
-                    })?,
+                    chats: args.chat,
                     out_dir: args.out.unwrap_or_else(|| config.download_dir.clone()),
                     resume: args.resume,
                     verbose_progress: args.verbose_progress,
@@ -1173,7 +1169,7 @@ mod tests {
         let Command::Export(args) = cli.command else {
             panic!("expected export command");
         };
-        assert_eq!(args.chat.as_deref(), Some("-1001406612170"));
+        assert_eq!(args.chat, vec!["-1001406612170"]);
     }
 
     #[test]
@@ -1194,10 +1190,33 @@ mod tests {
         let Command::Export(args) = cli.command else {
             panic!("expected export command");
         };
-        assert_eq!(args.chat.as_deref(), Some("-1001406612170"));
+        assert_eq!(args.chat, vec!["-1001406612170"]);
         assert_eq!(args.workers, Some(1));
         assert_eq!(args.out, Some(PathBuf::from("downloads")));
         assert!(args.json_report);
+    }
+
+    #[test]
+    fn export_accepts_repeated_chats() {
+        let cli = Cli::try_parse_from([
+            "tgbacky",
+            "export",
+            "--chat",
+            "@one",
+            "--chat",
+            "-1001406612170",
+            "--chat",
+            "Family, Photos",
+            "--out",
+            "downloads",
+        ])
+        .expect("parse export args");
+
+        let Command::Export(args) = cli.command else {
+            panic!("expected export command");
+        };
+        assert_eq!(args.chat, vec!["@one", "-1001406612170", "Family, Photos"]);
+        assert_eq!(args.out, Some(PathBuf::from("downloads")));
     }
 
     #[test]
@@ -1215,7 +1234,7 @@ mod tests {
         let Command::Export(args) = cli.command else {
             panic!("expected export command");
         };
-        assert_eq!(args.chat.as_deref(), Some("@example"));
+        assert_eq!(args.chat, vec!["@example"]);
     }
 
     #[test]
@@ -1226,7 +1245,7 @@ mod tests {
         let Command::Export(args) = cli.command else {
             panic!("expected export command");
         };
-        assert_eq!(args.chat.as_deref(), Some("Family Photos"));
+        assert_eq!(args.chat, vec!["Family Photos"]);
     }
 
     #[test]
