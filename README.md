@@ -18,8 +18,7 @@ It can save:
 Files sent as files stay files. `tgbacky` does not convert PNG to JPG, WebP to
 PNG, video to MP4, or anything like that. It saves Telegram bytes as-is.
 
-Not here yet: bot tokens, invite links, stickers, profile photos, contacts, and
-multi-chat batch export.
+Not here yet: bot tokens, invite links, stickers, profile photos, and contacts.
 
 ## Installation
 
@@ -135,6 +134,16 @@ tgbacky export --chat -1001234567890 --out ./downloads
 
 Run same command again later. It resumes.
 
+Export multiple chats in one command:
+
+```bash
+tgbacky export --chat @me --chat -1001234567890 --chat "Family Photos" --out ./downloads
+```
+
+Batch exports run one chat at a time. If one chat fails, `tgbacky` keeps going
+with the remaining chats, prints a per-chat summary, and exits non-zero at the
+end if any chat failed.
+
 ## Common Commands
 
 Use another profile:
@@ -233,7 +242,7 @@ Remove `--keep-files` if you also want to delete tracked files.
 ## Useful Export Flags
 
 ```text
---chat <CHAT>                      username, exact title, or numeric chat id
+--chat <CHAT>                      repeatable; username, exact title, or numeric chat id
 --out <DIR>                        where files go
 --only <KINDS>                     save only these media kinds
 --skip <KINDS>                     skip these media kinds

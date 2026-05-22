@@ -2,6 +2,10 @@
 
 Plain release notes for `tgbacky`.
 
+## Unreleased
+
+- support repeatable `--chat` on `tgbacky export` for sequential multi-chat backups
+
 ## 0.1.2
 
 - resolve numeric Telegram chat IDs from the existing session peer cache before falling back to a full dialog scan

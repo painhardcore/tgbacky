@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use tracing::{info, warn};
 
-use crate::app::open_export_context;
+use crate::app::{ExportContext, open_export_context};
 use crate::config::{AppConfig, DownloadConcurrencyOrigin};
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use crate::export::{describe_export_mode, describe_export_scope, run_export, run_export_plan};
 use crate::fsutil::write_utf8_file;
 use crate::recovery::cleanup_stale_temp_files;
@@ -16,7 +16,7 @@ use crate::telegram::RealTelegramGateway;
 use crate::types::{ExportOptions, MediaKind};
 
 pub struct ExportCommand {
-    pub chat: String,
+    pub chats: Vec<String>,
     pub out_dir: PathBuf,
     pub resume: bool,
     pub verbose_progress: bool,
@@ -28,6 +28,35 @@ pub struct ExportCommand {
     pub limit: Option<usize>,
     pub json_report: bool,
     pub rescan: bool,
+}
+
+#[derive(Clone)]
+struct SingleExportCommand {
+    chat: String,
+    out_dir: PathBuf,
+    resume: bool,
+    verbose_progress: bool,
+    media_filter: std::collections::BTreeSet<MediaKind>,
+    since_id: Option<i32>,
+    until_id: Option<i32>,
+    date_from: Option<chrono::NaiveDate>,
+    date_to: Option<chrono::NaiveDate>,
+    limit: Option<usize>,
+    json_report: bool,
+    rescan: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BatchExportStatus {
+    Succeeded,
+    Failed(String),
+    Interrupted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BatchExportResult {
+    chat: String,
+    status: BatchExportStatus,
 }
 
 pub struct ExportPlanCommand {
@@ -45,10 +74,82 @@ pub struct ExportPlanCommand {
 }
 
 pub async fn run(config: &AppConfig, command: ExportCommand) -> Result<()> {
+    if command.chats.is_empty() {
+        return Err(AppError::InvalidArgument(
+            "export requires --chat unless using `export plan`".to_string(),
+        ));
+    }
+
+    let is_batch = command.chats.len() > 1;
+    if is_batch {
+        print_export_batch_prelude(config, &command);
+    }
+
+    let mut context = open_export_context(config).await?;
+    let total = command.chats.len();
+    let mut results = Vec::new();
+
+    for (index, chat) in command.chats.iter().enumerate() {
+        let single = command.single(chat.clone());
+        if is_batch {
+            println!("Export {}/{}: {}", index + 1, total, chat);
+            println!();
+        } else {
+            print_export_prelude(config, &single);
+        }
+
+        match run_one_export(config, &mut context, single).await {
+            Ok(()) => results.push(BatchExportResult {
+                chat: chat.clone(),
+                status: BatchExportStatus::Succeeded,
+            }),
+            Err(AppError::Interrupted(message)) => {
+                results.push(BatchExportResult {
+                    chat: chat.clone(),
+                    status: BatchExportStatus::Interrupted,
+                });
+                if is_batch {
+                    print_export_batch_summary(&results);
+                }
+                return Err(AppError::Interrupted(message));
+            }
+            Err(error) => {
+                results.push(BatchExportResult {
+                    chat: chat.clone(),
+                    status: BatchExportStatus::Failed(error.to_string()),
+                });
+            }
+        }
+
+        if is_batch {
+            println!();
+        }
+    }
+
+    if is_batch {
+        print_export_batch_summary(&results);
+    }
+
+    let failed = results
+        .iter()
+        .filter(|result| matches!(result.status, BatchExportStatus::Failed(_)))
+        .count();
+    if failed > 0 {
+        return Err(AppError::Runtime(format!(
+            "export failed for {failed} of {total} chats"
+        )));
+    }
+
+    Ok(())
+}
+
+async fn run_one_export(
+    config: &AppConfig,
+    context: &mut ExportContext,
+    command: SingleExportCommand,
+) -> Result<()> {
     let requested_chat = command.chat.clone();
     let out_dir = command.out_dir.clone();
-    print_export_prelude(config, &command);
-    let mut context = open_export_context(config).await?;
     let run_id = context
         .database
         .start_run("export", Some(&requested_chat), Some(&out_dir))?;
@@ -177,6 +278,25 @@ pub async fn run(config: &AppConfig, command: ExportCommand) -> Result<()> {
     }
 }
 
+impl ExportCommand {
+    fn single(&self, chat: String) -> SingleExportCommand {
+        SingleExportCommand {
+            chat,
+            out_dir: self.out_dir.clone(),
+            resume: self.resume,
+            verbose_progress: self.verbose_progress,
+            media_filter: self.media_filter.clone(),
+            since_id: self.since_id,
+            until_id: self.until_id,
+            date_from: self.date_from,
+            date_to: self.date_to,
+            limit: self.limit,
+            json_report: self.json_report,
+            rescan: self.rescan,
+        }
+    }
+}
+
 pub async fn plan(config: &AppConfig, command: ExportPlanCommand) -> Result<()> {
     print_export_plan_prelude(config, &command);
     let gateway = RealTelegramGateway::new(config).await?;
@@ -216,7 +336,7 @@ pub async fn plan(config: &AppConfig, command: ExportPlanCommand) -> Result<()> 
     Ok(())
 }
 
-fn print_export_prelude(config: &AppConfig, command: &ExportCommand) {
+fn print_export_prelude(config: &AppConfig, command: &SingleExportCommand) {
     let options = ExportOptions {
         chat: command.chat.clone(),
         out_dir: command.out_dir.clone(),
@@ -273,6 +393,75 @@ fn print_export_prelude(config: &AppConfig, command: &ExportCommand) {
     }
 
     println!();
+}
+
+fn print_export_batch_prelude(config: &AppConfig, command: &ExportCommand) {
+    println!("Starting batch export");
+    println!(
+        "Profile           : {} ({})",
+        config.profile,
+        config.profile_source.label()
+    );
+    println!("API profile       : {}", config.api_profile);
+    println!("API credentials   : {}", export_credential_label(config));
+    println!("Session           : {}", config.session_path.display());
+    println!("State DB          : {}", config.db_path.display());
+    println!("Chats             : {}", command.chats.len());
+    println!("Output directory  : {}", command.out_dir.display());
+    println!(
+        "Media types       : {}",
+        format_media_filter(&command.media_filter)
+    );
+    println!(
+        "Download workers  : {}",
+        format_worker_setting(
+            config.download_concurrency,
+            config.download_concurrency_origin
+        )
+    );
+    println!("Batch behavior    : sequential; failed chats do not stop remaining chats");
+    println!();
+}
+
+fn print_export_batch_summary(results: &[BatchExportResult]) {
+    println!("{}", format_batch_summary(results));
+}
+
+fn format_batch_summary(results: &[BatchExportResult]) -> String {
+    let succeeded = results
+        .iter()
+        .filter(|result| matches!(result.status, BatchExportStatus::Succeeded))
+        .count();
+    let failed = results
+        .iter()
+        .filter(|result| matches!(result.status, BatchExportStatus::Failed(_)))
+        .count();
+    let interrupted = results
+        .iter()
+        .any(|result| matches!(result.status, BatchExportStatus::Interrupted));
+
+    let mut lines = vec![
+        "Batch summary".to_string(),
+        format!("Succeeded         : {succeeded}"),
+        format!("Failed            : {failed}"),
+    ];
+    if interrupted {
+        lines.push("Interrupted       : yes".to_string());
+    }
+    for result in results {
+        match &result.status {
+            BatchExportStatus::Succeeded => {
+                lines.push(format!("ok                : {}", result.chat));
+            }
+            BatchExportStatus::Interrupted => {
+                lines.push(format!("interrupted       : {}", result.chat));
+            }
+            BatchExportStatus::Failed(error) => {
+                lines.push(format!("failed            : {} - {}", result.chat, error));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn print_export_plan_prelude(config: &AppConfig, command: &ExportPlanCommand) {
@@ -373,6 +562,8 @@ async fn write_run_artifact(config: &AppConfig, artifact: RunArtifact) -> Option
 mod tests {
     use std::path::Path;
 
+    use super::{BatchExportResult, BatchExportStatus, format_batch_summary};
+
     #[test]
     fn artifact_path_suffix_tracks_outcome() {
         let base = Path::new("/tmp/artifacts");
@@ -380,5 +571,30 @@ mod tests {
         let failed = base.join("run_000001_failed.json");
         assert!(success.ends_with("run_000001_success.json"));
         assert!(failed.ends_with("run_000001_failed.json"));
+    }
+
+    #[test]
+    fn batch_summary_counts_successes_failures_and_interruption() {
+        let summary = format_batch_summary(&[
+            BatchExportResult {
+                chat: "@one".to_string(),
+                status: BatchExportStatus::Succeeded,
+            },
+            BatchExportResult {
+                chat: "@two".to_string(),
+                status: BatchExportStatus::Failed("chat resolution failed".to_string()),
+            },
+            BatchExportResult {
+                chat: "@three".to_string(),
+                status: BatchExportStatus::Interrupted,
+            },
+        ]);
+
+        assert!(summary.contains("Succeeded         : 1"));
+        assert!(summary.contains("Failed            : 1"));
+        assert!(summary.contains("Interrupted       : yes"));
+        assert!(summary.contains("ok                : @one"));
+        assert!(summary.contains("failed            : @two - chat resolution failed"));
+        assert!(summary.contains("interrupted       : @three"));
     }
 }
