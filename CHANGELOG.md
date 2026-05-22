@@ -2,9 +2,11 @@
 
 Plain release notes for `tgbacky`.
 
-## Unreleased
+## 0.2.0
 
 - support repeatable `--chat` on `tgbacky export` for sequential multi-chat backups
+- keep one run record and JSON artifact per chat during batch export
+- continue remaining chats after normal per-chat failures and return non-zero if any chat failed
 
 ## 0.1.2
 
