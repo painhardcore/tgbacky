@@ -54,6 +54,7 @@ pub trait TelegramGateway {
         &self,
         chat: &Self::ChatHandle,
         offset_id: Option<i32>,
+        max_date: Option<i32>,
         batch_size: usize,
     ) -> Result<Vec<ScannedMessage<Self::MediaHandle>>>;
     async fn fetch_messages_by_ids(
@@ -184,9 +185,10 @@ impl TelegramGateway for RealTelegramGateway {
         &self,
         chat: &Self::ChatHandle,
         offset_id: Option<i32>,
+        max_date: Option<i32>,
         batch_size: usize,
     ) -> Result<Vec<ScannedMessage<Self::MediaHandle>>> {
-        chats::fetch_history_batch_impl(self, chat, offset_id, batch_size).await
+        chats::fetch_history_batch_impl(self, chat, offset_id, max_date, batch_size).await
     }
 
     async fn fetch_messages_by_ids(

@@ -17,7 +17,7 @@ const CURRENT_PROFILE_FILE: &str = "current-profile";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadConcurrencyOrigin {
-    Auto,
+    Default,
     Cli,
 }
 
@@ -205,8 +205,8 @@ impl AppConfig {
             flood_sleep_threshold_secs: parse_optional("tgbacky_FLOOD_SLEEP_THRESHOLD_SECS")?
                 .unwrap_or(0),
             jitter_ms: parse_optional("tgbacky_JITTER_MS")?.unwrap_or(250),
-            download_concurrency: default_download_concurrency(),
-            download_concurrency_origin: DownloadConcurrencyOrigin::Auto,
+            download_concurrency: DEFAULT_DOWNLOAD_CONCURRENCY,
+            download_concurrency_origin: DownloadConcurrencyOrigin::Default,
             cleanup_stale_parts_on_start: parse_optional_bool(
                 "tgbacky_CLEANUP_STALE_PARTS_ON_START",
             )?
@@ -324,11 +324,9 @@ impl AppConfig {
     }
 }
 
-pub fn default_download_concurrency() -> usize {
-    std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4)
-}
+/// Downloads are network-bound, so the CPU count is the wrong input. Adaptive concurrency
+/// starts at one worker and climbs toward this limit while Telegram stays calm.
+pub const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 4;
 
 pub fn auto_scan_ahead_messages(download_concurrency: usize) -> usize {
     download_concurrency.saturating_mul(32).max(64)
@@ -634,7 +632,7 @@ mod tests {
             flood_sleep_threshold_secs: 5,
             jitter_ms: 0,
             download_concurrency: 3,
-            download_concurrency_origin: DownloadConcurrencyOrigin::Auto,
+            download_concurrency_origin: DownloadConcurrencyOrigin::Default,
             cleanup_stale_parts_on_start: false,
             stale_part_min_age_hours: 12,
             verbose_dependency_logs: false,
@@ -670,11 +668,6 @@ mod tests {
         config.download_dir = PathBuf::from("./data");
         config.run_artifact_dir = PathBuf::from("./data/artifacts");
         assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn auto_download_concurrency_is_positive() {
-        assert!(default_download_concurrency() > 0);
     }
 
     #[test]

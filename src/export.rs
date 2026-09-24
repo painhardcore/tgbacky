@@ -20,7 +20,8 @@ pub(crate) use progress::{
     ExportProgress, ProgressRuntime, describe_export_mode, describe_export_scope,
 };
 use scope::{
-    empty_checkpoint, reached_limit, should_stop_on_message, validate_export_options, within_scope,
+    empty_checkpoint, history_max_date, reached_limit, should_stop_on_message,
+    validate_export_options, within_scope,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -407,7 +408,7 @@ pub async fn run_export<G: TelegramGateway>(
             }
 
             let batch = gateway
-                .fetch_history_batch(&chat.handle, offset_id, 100)
+                .fetch_history_batch(&chat.handle, offset_id, None, 100)
                 .await?;
             if batch.is_empty() {
                 break 'newer;
@@ -534,7 +535,12 @@ pub async fn run_export<G: TelegramGateway>(
             }
 
             let batch = gateway
-                .fetch_history_batch(&chat.handle, offset_id, 100)
+                .fetch_history_batch(
+                    &chat.handle,
+                    offset_id,
+                    history_max_date(&options, offset_id),
+                    100,
+                )
                 .await?;
             if batch.is_empty() {
                 if updates_checkpoint {
@@ -801,7 +807,12 @@ pub async fn run_export_plan<G: TelegramGateway>(
             break 'scan;
         }
         let batch = gateway
-            .fetch_history_batch(&chat.handle, offset_id, 100)
+            .fetch_history_batch(
+                &chat.handle,
+                offset_id,
+                history_max_date(&options, offset_id),
+                100,
+            )
             .await?;
         if batch.is_empty() {
             planned_checkpoint.backfill_complete = true;
@@ -1460,6 +1471,7 @@ mod tests {
         batches: VecDeque<Vec<ScannedMessage<String>>>,
         all_messages: Vec<ScannedMessage<String>>,
         downloads: BTreeMap<String, Vec<u8>>,
+        history_max_dates: Vec<Option<i32>>,
     }
 
     #[derive(Clone)]
@@ -1481,6 +1493,7 @@ mod tests {
                     batches: batches.into(),
                     all_messages,
                     downloads,
+                    history_max_dates: Vec::new(),
                 })),
             }
         }
@@ -1531,9 +1544,11 @@ mod tests {
             &self,
             _: &Self::ChatHandle,
             _: Option<i32>,
+            max_date: Option<i32>,
             _: usize,
         ) -> Result<Vec<ScannedMessage<Self::MediaHandle>>> {
             let mut state = self.state.lock().await;
+            state.history_max_dates.push(max_date);
             Ok(state.batches.pop_front().unwrap_or_default())
         }
 
@@ -1588,7 +1603,7 @@ mod tests {
             flood_sleep_threshold_secs: 5,
             jitter_ms: 0,
             download_concurrency: 3,
-            download_concurrency_origin: DownloadConcurrencyOrigin::Auto,
+            download_concurrency_origin: DownloadConcurrencyOrigin::Default,
             run_artifact_dir: download_dir.join("run-artifacts"),
             cleanup_stale_parts_on_start: false,
             stale_part_min_age_hours: 12,
@@ -1706,6 +1721,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn date_to_starts_history_scan_at_the_date() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open_in_memory().expect("db");
+        let gateway = FakeGateway::new(vec![vec![]], BTreeMap::new());
+        let options = ExportOptions {
+            date_to: chrono::NaiveDate::from_ymd_opt(2020, 1, 1),
+            ..export_options(&config)
+        };
+        run_export_plan(&gateway, &mut db, &config, options, false)
+            .await
+            .expect("plan");
+
+        // 2020-01-02T00:00:00Z: Telegram returns messages strictly older than this.
+        let max_dates = gateway.state.lock().await.history_max_dates.clone();
+        assert_eq!(max_dates, vec![Some(1_577_923_200)]);
+    }
+
+    #[tokio::test]
     async fn plan_counts_downloaded_media_once_as_skipped_existing() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = config(tempdir.path());
@@ -1724,6 +1758,32 @@ mod tests {
         assert_eq!(report.media_found, 1);
         assert_eq!(report.skipped_existing, 1);
         assert_eq!(report.would_queue, 0);
+    }
+
+    #[tokio::test]
+    async fn plan_requeues_tracked_file_whose_size_changed() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        let bytes = BTreeMap::from([("photo:10".to_string(), b"demo".to_vec())]);
+        let gateway = FakeGateway::new(vec![vec![photo_message(10, 4)], vec![]], bytes.clone());
+        run_export(&gateway, &mut db, &config, export_options(&config))
+            .await
+            .expect("export");
+        let path = db.list_media_for_chat(1).expect("media")[0]
+            .local_path
+            .clone();
+        tokio::fs::write(&path, b"truncated!")
+            .await
+            .expect("damage file");
+
+        let gateway = FakeGateway::new(vec![vec![photo_message(10, 4)], vec![]], bytes);
+        let report = run_export_plan(&gateway, &mut db, &config, export_options(&config), false)
+            .await
+            .expect("plan");
+
+        assert_eq!(report.skipped_existing, 0);
+        assert_eq!(report.would_queue, 1);
     }
 
     #[tokio::test]

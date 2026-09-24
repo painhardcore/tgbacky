@@ -85,6 +85,25 @@ pub async fn run(config: &AppConfig, command: ExportCommand) -> Result<()> {
         print_export_batch_prelude(config, &command);
     }
 
+    // Only cleanup changes anything; without it, walking a large archive per chat was pure cost.
+    if config.cleanup_stale_parts_on_start {
+        let summary = cleanup_stale_temp_files(
+            &command.out_dir,
+            &config.temp_extension,
+            Duration::from_secs(config.stale_part_min_age_hours.saturating_mul(3_600)),
+            true,
+        )
+        .await?;
+        info!(
+            stale_found = summary.stale_files.len(),
+            scanned_files = summary.scanned_files,
+            unreadable_entries = summary.unreadable_entries,
+            removed = summary.removed,
+            output_dir = %command.out_dir.display(),
+            "cleaned up stale partial downloads before export"
+        );
+    }
+
     let mut context = open_export_context(config).await?;
     let total = command.chats.len();
     let mut results = Vec::new();
@@ -153,37 +172,6 @@ async fn run_one_export(
     let run_id = context
         .database
         .start_run("export", Some(&requested_chat), Some(&out_dir))?;
-
-    let stale_summary = match cleanup_stale_temp_files(
-        &out_dir,
-        &config.temp_extension,
-        Duration::from_secs(config.stale_part_min_age_hours.saturating_mul(3_600)),
-        config.cleanup_stale_parts_on_start,
-    )
-    .await
-    {
-        Ok(summary) => summary,
-        Err(error) => {
-            context.database.finish_run_failure(
-                run_id,
-                Some(&requested_chat),
-                Some(&out_dir),
-                &error.to_string(),
-                None,
-            )?;
-            return Err(error);
-        }
-    };
-    if stale_summary.stale_found > 0 {
-        info!(
-            stale_found = stale_summary.stale_found,
-            scanned_files = stale_summary.scanned_files,
-            unreadable_entries = stale_summary.unreadable_entries,
-            removed = stale_summary.removed,
-            output_dir = %out_dir.display(),
-            "found stale partial downloads before export"
-        );
-    }
 
     let result = run_export(
         &context.gateway,
@@ -521,7 +509,7 @@ fn export_credential_label(config: &AppConfig) -> String {
 
 fn format_worker_setting(workers: usize, origin: DownloadConcurrencyOrigin) -> String {
     match origin {
-        DownloadConcurrencyOrigin::Auto => format!("{workers} (auto-detected)"),
+        DownloadConcurrencyOrigin::Default => format!("{workers} (default)"),
         DownloadConcurrencyOrigin::Cli => format!("{workers} (from --workers)"),
     }
 }
