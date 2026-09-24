@@ -16,7 +16,7 @@ contacts.
 ## Installation
 
 Grab a binary from
-[GitHub Releases](https://github.com/painhardcore/TgMediaBacky/releases). You
+[GitHub Releases](https://github.com/painhardcore/tgbacky/releases). You
 don't need Rust.
 
 ```text
