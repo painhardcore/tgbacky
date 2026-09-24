@@ -253,10 +253,10 @@ impl AppConfig {
     }
 
     fn validate(&self) -> Result<()> {
-        let session_path = normalize_path_for_validation(&self.session_path)?;
-        let db_path = normalize_path_for_validation(&self.db_path)?;
-        let download_dir = normalize_path_for_validation(&self.download_dir)?;
-        let artifact_dir = normalize_path_for_validation(&self.run_artifact_dir)?;
+        let session_path = crate::fsutil::normalize_path(&self.session_path)?;
+        let db_path = crate::fsutil::normalize_path(&self.db_path)?;
+        let download_dir = crate::fsutil::normalize_path(&self.download_dir)?;
+        let artifact_dir = crate::fsutil::normalize_path(&self.run_artifact_dir)?;
 
         if let Some(api_id) = self.api_id
             && api_id <= 0
@@ -486,34 +486,6 @@ fn resolve_path_override(
         return Ok(path);
     }
     Ok(default.to_path_buf())
-}
-
-fn normalize_path_for_validation(path: &Path) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        env::current_dir()?.join(path)
-    };
-
-    if absolute.exists() {
-        Ok(absolute.canonicalize()?)
-    } else {
-        Ok(normalize_lexically(absolute))
-    }
-}
-
-fn normalize_lexically(path: PathBuf) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
 }
 
 fn path_contains(container: &Path, candidate: &Path) -> bool {
