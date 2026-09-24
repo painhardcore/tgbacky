@@ -86,7 +86,7 @@ pub(super) async fn list_chats_impl(
         // `iter_dialogs` fetches pages of DIALOG_PAGE_SIZE and serves the rest from
         // its buffer, so pace per page instead of per dialog.
         // ponytail: assumes full pages; a short page shifts pacing by a few items, harmless.
-        if chats.len() % DIALOG_PAGE_SIZE == 0 {
+        if chats.len().is_multiple_of(DIALOG_PAGE_SIZE) {
             gateway.pacer.wait_for_turn(PaceBucket::Request).await;
         }
         match dialogs.next().await {

@@ -112,7 +112,7 @@ fn download_iter(
 }
 
 fn completed_chunk_count(bytes_written: u64) -> Result<i32> {
-    if bytes_written % DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES != 0 {
+    if !bytes_written.is_multiple_of(DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES) {
         return Err(crate::error::AppError::Runtime(format!(
             "download hit flood wait after {bytes_written} bytes; cannot resume safely from a partial chunk"
         )));
