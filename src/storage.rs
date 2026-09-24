@@ -155,6 +155,7 @@ impl Database {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        crate::fsutil::restrict_sqlite_files(path)?;
 
         let conn = Connection::open(path)?;
         let mut database = Self { conn };
@@ -991,6 +992,32 @@ fn now_rfc3339() -> String {
 mod tests {
     use super::*;
     use crate::types::{ChatKind, MediaKind, MediaStatus};
+
+    #[cfg(unix)]
+    #[test]
+    fn state_db_and_wal_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.db");
+        let mut database = Database::open(&path).expect("open");
+        database
+            .save_checkpoint(&CheckpointState {
+                chat_id: 1,
+                high_watermark_message_id: Some(1),
+                backfill_cursor_message_id: None,
+                backfill_complete: false,
+            })
+            .expect("write");
+
+        for file in [path.clone(), dir.path().join("state.db-wal")] {
+            let mode = std::fs::metadata(&file)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", file.display());
+        }
+    }
 
     #[test]
     fn persists_checkpoint_roundtrip() {

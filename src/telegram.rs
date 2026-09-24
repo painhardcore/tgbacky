@@ -85,6 +85,8 @@ impl RealTelegramGateway {
         if let Some(parent) = config.session_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
+        // The session DB grants full account access.
+        crate::fsutil::restrict_sqlite_files(&config.session_path)?;
 
         let session = Arc::new(
             SqliteSession::open(&config.session_path)
