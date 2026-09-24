@@ -264,7 +264,7 @@ pub async fn run_export<G: TelegramGateway>(
     gateway: &G,
     database: &mut Database,
     config: &AppConfig,
-    options: ExportOptions,
+    mut options: ExportOptions,
 ) -> Result<ExportRunOutcome> {
     if !gateway.is_authorized().await? {
         return Err(AppError::Authentication(
@@ -273,6 +273,8 @@ pub async fn run_export<G: TelegramGateway>(
     }
 
     validate_export_options(&options)?;
+    // Stored media paths must not depend on the directory the command runs from.
+    options.out_dir = std::path::absolute(&options.out_dir)?;
     let started_at = Instant::now();
     let shutdown = ShutdownFlag::spawn();
     let chat = gateway.resolve_chat(&options.chat).await?;
@@ -748,7 +750,7 @@ pub async fn run_export_plan<G: TelegramGateway>(
     gateway: &G,
     database: &mut Database,
     config: &AppConfig,
-    options: ExportOptions,
+    mut options: ExportOptions,
     save_queue: bool,
 ) -> Result<ExportPlanReport> {
     if !gateway.is_authorized().await? {
@@ -757,6 +759,8 @@ pub async fn run_export_plan<G: TelegramGateway>(
         ));
     }
     validate_export_options(&options)?;
+    // Stored media paths must not depend on the directory the command runs from.
+    options.out_dir = std::path::absolute(&options.out_dir)?;
     if save_queue && !is_canonical_automatic_sync(&options) {
         return Err(AppError::InvalidArgument(
             "`export plan --save-queue` only supports automatic full-chat sync in v1; remove bounds, --limit, and --rescan".to_string(),
@@ -1689,6 +1693,34 @@ mod tests {
         };
         assert_eq!(report.downloaded, 1);
         assert_eq!(report.media_found, 1);
+    }
+
+    #[tokio::test]
+    async fn relative_output_dir_is_stored_as_absolute_path() {
+        // A temp dir under the current directory gives a relative path that stays isolated.
+        let tempdir = tempfile::tempdir_in(".").expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        let relative_out = PathBuf::from(tempdir.path().file_name().expect("name")).join("out");
+        let gateway = FakeGateway::new(
+            vec![vec![photo_message(10, 4)], vec![]],
+            BTreeMap::from([("photo:10".to_string(), b"demo".to_vec())]),
+        );
+        let options = ExportOptions {
+            out_dir: relative_out,
+            ..export_options(&config)
+        };
+        run_export(&gateway, &mut db, &config, options)
+            .await
+            .expect("export");
+
+        let media = db.list_media_for_chat(1).expect("media");
+        assert!(
+            media[0].local_path.is_absolute(),
+            "{:?}",
+            media[0].local_path
+        );
+        assert!(media[0].local_path.exists());
     }
 
     #[tokio::test]
