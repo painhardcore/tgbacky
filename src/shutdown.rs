@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -12,7 +12,15 @@ pub struct ShutdownFlag {
 }
 
 impl ShutdownFlag {
+    /// Returns the process-wide flag, installing the signal listeners on first use. A batch
+    /// export calls this once per chat; fresh listeners each time printed the cancel message
+    /// once per chat on a single Ctrl+C.
     pub fn spawn() -> Self {
+        static PROCESS_FLAG: OnceLock<ShutdownFlag> = OnceLock::new();
+        PROCESS_FLAG.get_or_init(Self::install).clone()
+    }
+
+    fn install() -> Self {
         let flag = Self::default();
 
         let ctrl_c_flag = flag.clone();
@@ -60,5 +68,18 @@ impl ShutdownFlag {
     #[cfg(test)]
     pub fn request_for_test(&self) {
         self.request("test");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn spawn_reuses_one_process_flag() {
+        let first = ShutdownFlag::spawn();
+        let second = ShutdownFlag::spawn();
+        // Compare identity only: requesting shutdown here would leak into parallel tests.
+        assert!(Arc::ptr_eq(&first.requested, &second.requested));
     }
 }
