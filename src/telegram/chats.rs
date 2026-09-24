@@ -12,6 +12,9 @@ use grammers_client::peer::Peer;
 use grammers_session::types::{PeerId, PeerRef};
 use tracing::debug;
 
+// Matches grammers' `MAX_LIMIT` for `GetDialogs`.
+const DIALOG_PAGE_SIZE: usize = 100;
+
 pub(super) fn chat_summary_from_peer(peer: &Peer, handle: PeerRef) -> ChatSummary<PeerRef> {
     let kind = match peer {
         Peer::User(_) => ChatKind::User,
@@ -80,7 +83,12 @@ pub(super) async fn list_chats_impl(
     let mut chats = Vec::new();
     let mut attempt = 0_u32;
     loop {
-        gateway.pacer.wait_for_turn(PaceBucket::Request).await;
+        // `iter_dialogs` fetches pages of DIALOG_PAGE_SIZE and serves the rest from
+        // its buffer, so pace per page instead of per dialog.
+        // ponytail: assumes full pages; a short page shifts pacing by a few items, harmless.
+        if chats.len() % DIALOG_PAGE_SIZE == 0 {
+            gateway.pacer.wait_for_turn(PaceBucket::Request).await;
+        }
         match dialogs.next().await {
             Ok(Some(dialog)) => {
                 attempt = 0;

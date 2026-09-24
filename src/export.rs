@@ -377,6 +377,8 @@ pub async fn run_export<G: TelegramGateway>(
             };
             database.save_checkpoint(&checkpoint)?;
             durable_checkpoint = checkpoint.clone();
+            // The plan is consumed; leaving it `complete` would reset the checkpoint every run.
+            database.supersede_export_plan(plan.id)?;
         }
     }
 
@@ -1378,7 +1380,8 @@ async fn handle_download_result<G: TelegramGateway>(
                 counters.failed = counters.failed.saturating_sub(1);
             }
         }
-        crate::types::MediaStatus::Failed if !capture_retry_jobs || event.retry_job.is_none() => {
+        // Final-sweep failures (capture_retry_jobs == false) were already counted in the first pass.
+        crate::types::MediaStatus::Failed if capture_retry_jobs && event.retry_job.is_none() => {
             counters.failed += 1;
         }
         _ => {}
@@ -1859,6 +1862,77 @@ mod tests {
         assert!(checkpoint.backfill_complete);
         let media = db.list_media_for_chat(1).expect("media");
         assert_eq!(media[0].status, MediaStatus::Downloaded);
+    }
+
+    #[tokio::test]
+    async fn promoted_saved_plan_does_not_reset_later_checkpoints() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        let bytes = BTreeMap::from([
+            ("photo:10".to_string(), b"demo".to_vec()),
+            ("photo:11".to_string(), b"more".to_vec()),
+        ]);
+        let gateway = |batch: Vec<ScannedMessage<String>>| {
+            FakeGateway::new(vec![batch, vec![]], bytes.clone())
+        };
+
+        run_export_plan(
+            &gateway(vec![photo_message(10, 4)]),
+            &mut db,
+            &config,
+            export_options(&config),
+            true,
+        )
+        .await
+        .expect("plan");
+        run_export(
+            &gateway(vec![photo_message(10, 4)]),
+            &mut db,
+            &config,
+            export_options(&config),
+        )
+        .await
+        .expect("drain plan");
+        let newer = vec![photo_message(11, 4), photo_message(10, 4)];
+        run_export(
+            &gateway(newer.clone()),
+            &mut db,
+            &config,
+            export_options(&config),
+        )
+        .await
+        .expect("fetch newer");
+
+        let ExportRunOutcome::Completed(report) =
+            run_export(&gateway(newer), &mut db, &config, export_options(&config))
+                .await
+                .expect("idle run")
+        else {
+            panic!("expected completed outcome");
+        };
+        assert_eq!(report.scanned_messages, 0);
+    }
+
+    #[tokio::test]
+    async fn permanently_failed_download_counts_once() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        // Declared size never matches the bytes, so every attempt, including the final sweep, fails.
+        let gateway = FakeGateway::new(
+            vec![vec![photo_message(10, 99)], vec![]],
+            BTreeMap::from([("photo:10".to_string(), b"demo".to_vec())]),
+        );
+        let ExportRunOutcome::Completed(report) =
+            run_export(&gateway, &mut db, &config, export_options(&config))
+                .await
+                .expect("export")
+        else {
+            panic!("expected completed outcome");
+        };
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.downloaded, 0);
     }
 
     #[tokio::test]
