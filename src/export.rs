@@ -111,6 +111,9 @@ struct ExportPlanCounters {
     per_kind: BTreeMap<String, usize>,
 }
 
+/// Telegram message ids start at 1, so no download event ever matches this frontier.
+const CHECKPOINT_ONLY_FRONTIER: i32 = 0;
+
 struct MessageFrontier {
     message_id: i32,
     checkpoint: Option<crate::types::CheckpointState>,
@@ -411,33 +414,30 @@ pub async fn run_export<G: TelegramGateway>(
                 .fetch_history_batch(&chat.handle, offset_id, 100)
                 .await?;
             if batch.is_empty() {
-                checkpoint.high_watermark_message_id = newest_seen;
                 break 'newer;
             }
 
             for message in &batch {
                 if message.message_id <= old_high {
-                    checkpoint.high_watermark_message_id = newest_seen;
                     break 'newer;
                 }
 
                 newest_seen = Some(
                     newest_seen.map_or(message.message_id, |value| value.max(message.message_id)),
                 );
-                let mut pending_checkpoint = checkpoint.clone();
-                pending_checkpoint.high_watermark_message_id = newest_seen;
+                // No per-message checkpoint: the scan runs newest to oldest, so raising the
+                // watermark before reaching `old_high` would skip the unscanned gap forever.
                 queue_message::<G>(
                     &processor,
                     database,
                     message,
-                    updates_checkpoint.then_some(&pending_checkpoint),
+                    None,
                     &mut counters,
                     &mut frontiers,
                     &mut pending_jobs,
                 )
                 .await?;
                 drain_completed_frontier(database, &mut frontiers, &mut durable_checkpoint)?;
-                checkpoint = pending_checkpoint;
                 pump.maybe_start_downloads(
                     database,
                     &mut pending_jobs,
@@ -496,6 +496,18 @@ pub async fn run_export<G: TelegramGateway>(
             );
 
             offset_id = batch.last().map(|message| message.message_id);
+        }
+
+        if !stop {
+            // Every message above `old_high` is queued now. This checkpoint-only frontier
+            // saves the new watermark once all of their downloads have finished.
+            checkpoint.high_watermark_message_id = newest_seen;
+            frontiers.push_back(MessageFrontier {
+                message_id: CHECKPOINT_ONLY_FRONTIER,
+                checkpoint: Some(checkpoint.clone()),
+                remaining_downloads: 0,
+            });
+            drain_completed_frontier(database, &mut frontiers, &mut durable_checkpoint)?;
         }
     }
 
@@ -1936,7 +1948,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn automatic_sync_limit_persists_watermark() {
+    async fn interrupted_newer_scan_keeps_watermark_until_gap_is_scanned() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = config(tempdir.path());
         let mut db = Database::open(&config.db_path).expect("db");
@@ -1947,52 +1959,40 @@ mod tests {
             backfill_complete: true,
         })
         .expect("seed checkpoint");
-
-        let gateway = FakeGateway::new(
-            vec![vec![
-                ScannedMessage {
-                    message_id: 5,
-                    date: Utc::now(),
-                    media: vec![],
-                },
-                ScannedMessage {
-                    message_id: 4,
-                    date: Utc::now(),
-                    media: vec![],
-                },
-            ]],
-            BTreeMap::new(),
-        );
-
-        let outcome = run_export(
-            &gateway,
-            &mut db,
-            &config,
-            ExportOptions {
-                chat: "@demo".to_string(),
-                out_dir: config.download_dir.clone(),
-                resume: false,
-                verbose_progress: false,
-                media_filter: config.media_filter.clone(),
-                since_id: None,
-                until_id: None,
-                date_from: None,
-                date_to: None,
-                limit: Some(1),
-                rescan: false,
+        let newer = vec![
+            ScannedMessage {
+                message_id: 5,
+                date: Utc::now(),
+                media: vec![],
             },
-        )
-        .await
-        .expect("export");
+            photo_message(4, 4),
+        ];
+        let bytes = BTreeMap::from([("photo:4".to_string(), b"demo".to_vec())]);
+
+        let limited = ExportOptions {
+            limit: Some(1),
+            ..export_options(&config)
+        };
+        let gateway = FakeGateway::new(vec![newer.clone()], bytes.clone());
+        let outcome = run_export(&gateway, &mut db, &config, limited)
+            .await
+            .expect("limited export");
         let ExportRunOutcome::Interrupted(report) = outcome else {
             panic!("expected interrupted outcome");
         };
-
         assert_eq!(report.scanned_messages, 1);
-        let checkpoint = db
-            .load_checkpoint(1)
-            .expect("load checkpoint")
-            .expect("checkpoint");
+        let checkpoint = db.load_checkpoint(1).expect("load").expect("checkpoint");
+        assert_eq!(checkpoint.high_watermark_message_id, Some(3));
+
+        let gateway = FakeGateway::new(vec![newer, vec![]], bytes);
+        let outcome = run_export(&gateway, &mut db, &config, export_options(&config))
+            .await
+            .expect("follow-up export");
+        let ExportRunOutcome::Completed(report) = outcome else {
+            panic!("expected completed outcome");
+        };
+        assert_eq!(report.downloaded, 1);
+        let checkpoint = db.load_checkpoint(1).expect("load").expect("checkpoint");
         assert_eq!(checkpoint.high_watermark_message_id, Some(5));
     }
 
