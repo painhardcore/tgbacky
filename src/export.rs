@@ -3,7 +3,7 @@ mod progress;
 mod scope;
 
 use std::collections::{BTreeMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::config::{AppConfig, auto_scan_ahead_messages};
@@ -291,15 +291,9 @@ pub async fn run_export<G: TelegramGateway>(
         && options.date_to.is_none()
         && !options.rescan;
 
-    let mut checkpoint = if updates_checkpoint {
-        database
-            .load_checkpoint(chat.id)?
-            .unwrap_or_else(|| empty_checkpoint(chat.id))
-    } else {
-        database
-            .load_checkpoint(chat.id)?
-            .unwrap_or_else(|| empty_checkpoint(chat.id))
-    };
+    let mut checkpoint = database
+        .load_checkpoint(chat.id)?
+        .unwrap_or_else(|| empty_checkpoint(chat.id));
 
     let progress = ExportProgress::new(&chat.title, &options);
     let mut counters = ExportCounters::default();
@@ -329,7 +323,7 @@ pub async fn run_export<G: TelegramGateway>(
 
     let media_filter_key = media_filter_key(&options.media_filter);
     let scope_hash = export_scope_hash(&options);
-    let normalized_out_dir = normalize_plan_output_dir(&options.out_dir)?;
+    let normalized_out_dir = crate::fsutil::normalize_path(&options.out_dir)?;
     let saved_plan = if updates_checkpoint {
         database.latest_complete_export_plan(
             chat.id,
@@ -764,7 +758,7 @@ pub async fn run_export_plan<G: TelegramGateway>(
 
     let media_filter_key = media_filter_key(&options.media_filter);
     let scope_hash = export_scope_hash(&options);
-    let normalized_out_dir = normalize_plan_output_dir(&options.out_dir)?;
+    let normalized_out_dir = crate::fsutil::normalize_path(&options.out_dir)?;
     let plan_id = if save_queue {
         Some(database.start_export_plan(NewExportPlan {
             chat_id: chat.id,
@@ -926,33 +920,6 @@ pub fn export_scope_hash(options: &ExportOptions) -> String {
     let mut hasher = Sha256::new();
     hasher.update(payload.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-pub fn normalize_plan_output_dir(path: &Path) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    if absolute.exists() {
-        Ok(absolute.canonicalize()?)
-    } else {
-        Ok(normalize_lexically(absolute))
-    }
-}
-
-fn normalize_lexically(path: PathBuf) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
 }
 
 fn is_canonical_automatic_sync(options: &ExportOptions) -> bool {
@@ -1847,7 +1814,7 @@ mod tests {
             .latest_complete_export_plan(
                 1,
                 &config.profile,
-                &normalize_plan_output_dir(&config.download_dir).expect("out"),
+                &crate::fsutil::normalize_path(&config.download_dir).expect("out"),
                 &media_filter_key(&config.media_filter),
                 &export_scope_hash(&export_options(&config)),
             )
