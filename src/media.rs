@@ -46,6 +46,11 @@ pub fn classify_document_hints(mime_type: Option<&str>, hints: DocumentHints) ->
         return None;
     }
 
+    // Before the `image/*` check, which would otherwise swallow GIF files.
+    if hints.animated || mime_type == Some("image/gif") {
+        return Some(MediaKind::Animation);
+    }
+
     if let Some(mime) = mime_type
         && mime.starts_with("image/")
     {
@@ -58,10 +63,6 @@ pub fn classify_document_hints(mime_type: Option<&str>, hints: DocumentHints) ->
 
     if hints.has_audio_attr {
         return Some(MediaKind::Audio);
-    }
-
-    if hints.animated || mime_type == Some("image/gif") {
-        return Some(MediaKind::Animation);
     }
 
     if hints.has_video_attr {
@@ -211,6 +212,18 @@ pub fn sanitize_file_stem(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_gif_documents_as_animation() {
+        assert_eq!(
+            classify_document_hints(Some("image/gif"), DocumentHints::default()),
+            Some(MediaKind::Animation)
+        );
+        assert_eq!(
+            classify_document_hints(Some("image/webp"), DocumentHints::default()),
+            Some(MediaKind::ImageDocument)
+        );
+    }
 
     #[test]
     fn classifies_documents() {
