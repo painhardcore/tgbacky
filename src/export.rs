@@ -43,8 +43,6 @@ pub struct ExportPlanReport {
     pub plan_id: Option<i64>,
     pub scanned_messages: usize,
     pub media_found: usize,
-    pub already_tracked: usize,
-    pub already_downloaded: usize,
     pub skipped_existing: usize,
     pub would_queue: usize,
     pub estimated_bytes: u64,
@@ -78,8 +76,6 @@ impl ExportPlanReport {
             format!("Plan id            : {plan_id}"),
             format!("Scanned messages   : {}", self.scanned_messages),
             format!("Media found        : {}", self.media_found),
-            format!("Already tracked    : {}", self.already_tracked),
-            format!("Already downloaded : {}", self.already_downloaded),
             format!("Skipped existing   : {}", self.skipped_existing),
             format!("Would queue        : {}", self.would_queue),
             format!("Estimated bytes    : {}", self.estimated_bytes),
@@ -103,13 +99,14 @@ impl ExportPlanReport {
 struct ExportPlanCounters {
     scanned_messages: usize,
     media_found: usize,
-    already_tracked: usize,
-    already_downloaded: usize,
     skipped_existing: usize,
     would_queue: usize,
     estimated_bytes: u64,
     per_kind: BTreeMap<String, usize>,
 }
+
+/// Telegram message ids start at 1, so no download event ever matches this frontier.
+const CHECKPOINT_ONLY_FRONTIER: i32 = 0;
 
 struct MessageFrontier {
     message_id: i32,
@@ -261,7 +258,7 @@ pub async fn run_export<G: TelegramGateway>(
     gateway: &G,
     database: &mut Database,
     config: &AppConfig,
-    options: ExportOptions,
+    mut options: ExportOptions,
 ) -> Result<ExportRunOutcome> {
     if !gateway.is_authorized().await? {
         return Err(AppError::Authentication(
@@ -270,6 +267,8 @@ pub async fn run_export<G: TelegramGateway>(
     }
 
     validate_export_options(&options)?;
+    // Stored media paths must not depend on the directory the command runs from.
+    options.out_dir = std::path::absolute(&options.out_dir)?;
     let started_at = Instant::now();
     let shutdown = ShutdownFlag::spawn();
     let chat = gateway.resolve_chat(&options.chat).await?;
@@ -377,6 +376,8 @@ pub async fn run_export<G: TelegramGateway>(
             };
             database.save_checkpoint(&checkpoint)?;
             durable_checkpoint = checkpoint.clone();
+            // The plan is consumed; leaving it `complete` would reset the checkpoint every run.
+            database.supersede_export_plan(plan.id)?;
         }
     }
 
@@ -409,33 +410,30 @@ pub async fn run_export<G: TelegramGateway>(
                 .fetch_history_batch(&chat.handle, offset_id, 100)
                 .await?;
             if batch.is_empty() {
-                checkpoint.high_watermark_message_id = newest_seen;
                 break 'newer;
             }
 
             for message in &batch {
                 if message.message_id <= old_high {
-                    checkpoint.high_watermark_message_id = newest_seen;
                     break 'newer;
                 }
 
                 newest_seen = Some(
                     newest_seen.map_or(message.message_id, |value| value.max(message.message_id)),
                 );
-                let mut pending_checkpoint = checkpoint.clone();
-                pending_checkpoint.high_watermark_message_id = newest_seen;
+                // No per-message checkpoint: the scan runs newest to oldest, so raising the
+                // watermark before reaching `old_high` would skip the unscanned gap forever.
                 queue_message::<G>(
                     &processor,
                     database,
                     message,
-                    updates_checkpoint.then_some(&pending_checkpoint),
+                    None,
                     &mut counters,
                     &mut frontiers,
                     &mut pending_jobs,
                 )
                 .await?;
                 drain_completed_frontier(database, &mut frontiers, &mut durable_checkpoint)?;
-                checkpoint = pending_checkpoint;
                 pump.maybe_start_downloads(
                     database,
                     &mut pending_jobs,
@@ -494,6 +492,18 @@ pub async fn run_export<G: TelegramGateway>(
             );
 
             offset_id = batch.last().map(|message| message.message_id);
+        }
+
+        if !stop {
+            // Every message above `old_high` is queued now. This checkpoint-only frontier
+            // saves the new watermark once all of their downloads have finished.
+            checkpoint.high_watermark_message_id = newest_seen;
+            frontiers.push_back(MessageFrontier {
+                message_id: CHECKPOINT_ONLY_FRONTIER,
+                checkpoint: Some(checkpoint.clone()),
+                remaining_downloads: 0,
+            });
+            drain_completed_frontier(database, &mut frontiers, &mut durable_checkpoint)?;
         }
     }
 
@@ -734,7 +744,7 @@ pub async fn run_export_plan<G: TelegramGateway>(
     gateway: &G,
     database: &mut Database,
     config: &AppConfig,
-    options: ExportOptions,
+    mut options: ExportOptions,
     save_queue: bool,
 ) -> Result<ExportPlanReport> {
     if !gateway.is_authorized().await? {
@@ -743,6 +753,8 @@ pub async fn run_export_plan<G: TelegramGateway>(
         ));
     }
     validate_export_options(&options)?;
+    // Stored media paths must not depend on the directory the command runs from.
+    options.out_dir = std::path::absolute(&options.out_dir)?;
     if save_queue && !is_canonical_automatic_sync(&options) {
         return Err(AppError::InvalidArgument(
             "`export plan --save-queue` only supports automatic full-chat sync in v1; remove bounds, --limit, and --rescan".to_string(),
@@ -819,16 +831,6 @@ pub async fn run_export_plan<G: TelegramGateway>(
             }
 
             let planned = processor.plan_message(database, message).await?;
-            counters.already_tracked += planned
-                .initial_records
-                .iter()
-                .filter(|record| record.status == MediaStatus::SkippedExisting)
-                .count();
-            counters.already_downloaded += planned
-                .initial_records
-                .iter()
-                .filter(|record| record.status == MediaStatus::SkippedExisting)
-                .count();
             counters.skipped_existing += planned
                 .initial_records
                 .iter()
@@ -888,8 +890,6 @@ pub async fn run_export_plan<G: TelegramGateway>(
         plan_id,
         scanned_messages: counters.scanned_messages,
         media_found: counters.media_found,
-        already_tracked: counters.already_tracked,
-        already_downloaded: counters.already_downloaded,
         skipped_existing: counters.skipped_existing,
         would_queue: counters.would_queue,
         estimated_bytes: counters.estimated_bytes,
@@ -1378,7 +1378,8 @@ async fn handle_download_result<G: TelegramGateway>(
                 counters.failed = counters.failed.saturating_sub(1);
             }
         }
-        crate::types::MediaStatus::Failed if !capture_retry_jobs || event.retry_job.is_none() => {
+        // Final-sweep failures (capture_retry_jobs == false) were already counted in the first pass.
+        crate::types::MediaStatus::Failed if capture_retry_jobs && event.retry_job.is_none() => {
             counters.failed += 1;
         }
         _ => {}
@@ -1677,6 +1678,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relative_output_dir_is_stored_as_absolute_path() {
+        // A temp dir under the current directory gives a relative path that stays isolated.
+        let tempdir = tempfile::tempdir_in(".").expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        let relative_out = PathBuf::from(tempdir.path().file_name().expect("name")).join("out");
+        let gateway = FakeGateway::new(
+            vec![vec![photo_message(10, 4)], vec![]],
+            BTreeMap::from([("photo:10".to_string(), b"demo".to_vec())]),
+        );
+        let options = ExportOptions {
+            out_dir: relative_out,
+            ..export_options(&config)
+        };
+        run_export(&gateway, &mut db, &config, options)
+            .await
+            .expect("export");
+
+        let media = db.list_media_for_chat(1).expect("media");
+        assert!(
+            media[0].local_path.is_absolute(),
+            "{:?}",
+            media[0].local_path
+        );
+        assert!(media[0].local_path.exists());
+    }
+
+    #[tokio::test]
+    async fn plan_counts_downloaded_media_once_as_skipped_existing() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        let bytes = BTreeMap::from([("photo:10".to_string(), b"demo".to_vec())]);
+        let gateway = FakeGateway::new(vec![vec![photo_message(10, 4)], vec![]], bytes.clone());
+        run_export(&gateway, &mut db, &config, export_options(&config))
+            .await
+            .expect("export");
+
+        let gateway = FakeGateway::new(vec![vec![photo_message(10, 4)], vec![]], bytes);
+        let report = run_export_plan(&gateway, &mut db, &config, export_options(&config), false)
+            .await
+            .expect("plan");
+
+        assert_eq!(report.media_found, 1);
+        assert_eq!(report.skipped_existing, 1);
+        assert_eq!(report.would_queue, 0);
+    }
+
+    #[tokio::test]
     async fn waiting_download_aborts_when_shutdown_requested() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = config(tempdir.path());
@@ -1862,7 +1912,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn automatic_sync_limit_persists_watermark() {
+    async fn promoted_saved_plan_does_not_reset_later_checkpoints() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        let bytes = BTreeMap::from([
+            ("photo:10".to_string(), b"demo".to_vec()),
+            ("photo:11".to_string(), b"more".to_vec()),
+        ]);
+        let gateway = |batch: Vec<ScannedMessage<String>>| {
+            FakeGateway::new(vec![batch, vec![]], bytes.clone())
+        };
+
+        run_export_plan(
+            &gateway(vec![photo_message(10, 4)]),
+            &mut db,
+            &config,
+            export_options(&config),
+            true,
+        )
+        .await
+        .expect("plan");
+        run_export(
+            &gateway(vec![photo_message(10, 4)]),
+            &mut db,
+            &config,
+            export_options(&config),
+        )
+        .await
+        .expect("drain plan");
+        let newer = vec![photo_message(11, 4), photo_message(10, 4)];
+        run_export(
+            &gateway(newer.clone()),
+            &mut db,
+            &config,
+            export_options(&config),
+        )
+        .await
+        .expect("fetch newer");
+
+        let ExportRunOutcome::Completed(report) =
+            run_export(&gateway(newer), &mut db, &config, export_options(&config))
+                .await
+                .expect("idle run")
+        else {
+            panic!("expected completed outcome");
+        };
+        assert_eq!(report.scanned_messages, 0);
+    }
+
+    #[tokio::test]
+    async fn permanently_failed_download_counts_once() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        // Declared size never matches the bytes, so every attempt, including the final sweep, fails.
+        let gateway = FakeGateway::new(
+            vec![vec![photo_message(10, 99)], vec![]],
+            BTreeMap::from([("photo:10".to_string(), b"demo".to_vec())]),
+        );
+        let ExportRunOutcome::Completed(report) =
+            run_export(&gateway, &mut db, &config, export_options(&config))
+                .await
+                .expect("export")
+        else {
+            panic!("expected completed outcome");
+        };
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.downloaded, 0);
+    }
+
+    #[tokio::test]
+    async fn interrupted_newer_scan_keeps_watermark_until_gap_is_scanned() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = config(tempdir.path());
         let mut db = Database::open(&config.db_path).expect("db");
@@ -1873,52 +1994,40 @@ mod tests {
             backfill_complete: true,
         })
         .expect("seed checkpoint");
-
-        let gateway = FakeGateway::new(
-            vec![vec![
-                ScannedMessage {
-                    message_id: 5,
-                    date: Utc::now(),
-                    media: vec![],
-                },
-                ScannedMessage {
-                    message_id: 4,
-                    date: Utc::now(),
-                    media: vec![],
-                },
-            ]],
-            BTreeMap::new(),
-        );
-
-        let outcome = run_export(
-            &gateway,
-            &mut db,
-            &config,
-            ExportOptions {
-                chat: "@demo".to_string(),
-                out_dir: config.download_dir.clone(),
-                resume: false,
-                verbose_progress: false,
-                media_filter: config.media_filter.clone(),
-                since_id: None,
-                until_id: None,
-                date_from: None,
-                date_to: None,
-                limit: Some(1),
-                rescan: false,
+        let newer = vec![
+            ScannedMessage {
+                message_id: 5,
+                date: Utc::now(),
+                media: vec![],
             },
-        )
-        .await
-        .expect("export");
+            photo_message(4, 4),
+        ];
+        let bytes = BTreeMap::from([("photo:4".to_string(), b"demo".to_vec())]);
+
+        let limited = ExportOptions {
+            limit: Some(1),
+            ..export_options(&config)
+        };
+        let gateway = FakeGateway::new(vec![newer.clone()], bytes.clone());
+        let outcome = run_export(&gateway, &mut db, &config, limited)
+            .await
+            .expect("limited export");
         let ExportRunOutcome::Interrupted(report) = outcome else {
             panic!("expected interrupted outcome");
         };
-
         assert_eq!(report.scanned_messages, 1);
-        let checkpoint = db
-            .load_checkpoint(1)
-            .expect("load checkpoint")
-            .expect("checkpoint");
+        let checkpoint = db.load_checkpoint(1).expect("load").expect("checkpoint");
+        assert_eq!(checkpoint.high_watermark_message_id, Some(3));
+
+        let gateway = FakeGateway::new(vec![newer, vec![]], bytes);
+        let outcome = run_export(&gateway, &mut db, &config, export_options(&config))
+            .await
+            .expect("follow-up export");
+        let ExportRunOutcome::Completed(report) = outcome else {
+            panic!("expected completed outcome");
+        };
+        assert_eq!(report.downloaded, 1);
+        let checkpoint = db.load_checkpoint(1).expect("load").expect("checkpoint");
         assert_eq!(checkpoint.high_watermark_message_id, Some(5));
     }
 
