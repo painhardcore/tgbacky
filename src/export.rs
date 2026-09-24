@@ -43,8 +43,6 @@ pub struct ExportPlanReport {
     pub plan_id: Option<i64>,
     pub scanned_messages: usize,
     pub media_found: usize,
-    pub already_tracked: usize,
-    pub already_downloaded: usize,
     pub skipped_existing: usize,
     pub would_queue: usize,
     pub estimated_bytes: u64,
@@ -78,8 +76,6 @@ impl ExportPlanReport {
             format!("Plan id            : {plan_id}"),
             format!("Scanned messages   : {}", self.scanned_messages),
             format!("Media found        : {}", self.media_found),
-            format!("Already tracked    : {}", self.already_tracked),
-            format!("Already downloaded : {}", self.already_downloaded),
             format!("Skipped existing   : {}", self.skipped_existing),
             format!("Would queue        : {}", self.would_queue),
             format!("Estimated bytes    : {}", self.estimated_bytes),
@@ -103,8 +99,6 @@ impl ExportPlanReport {
 struct ExportPlanCounters {
     scanned_messages: usize,
     media_found: usize,
-    already_tracked: usize,
-    already_downloaded: usize,
     skipped_existing: usize,
     would_queue: usize,
     estimated_bytes: u64,
@@ -837,16 +831,6 @@ pub async fn run_export_plan<G: TelegramGateway>(
             }
 
             let planned = processor.plan_message(database, message).await?;
-            counters.already_tracked += planned
-                .initial_records
-                .iter()
-                .filter(|record| record.status == MediaStatus::SkippedExisting)
-                .count();
-            counters.already_downloaded += planned
-                .initial_records
-                .iter()
-                .filter(|record| record.status == MediaStatus::SkippedExisting)
-                .count();
             counters.skipped_existing += planned
                 .initial_records
                 .iter()
@@ -906,8 +890,6 @@ pub async fn run_export_plan<G: TelegramGateway>(
         plan_id,
         scanned_messages: counters.scanned_messages,
         media_found: counters.media_found,
-        already_tracked: counters.already_tracked,
-        already_downloaded: counters.already_downloaded,
         skipped_existing: counters.skipped_existing,
         would_queue: counters.would_queue,
         estimated_bytes: counters.estimated_bytes,
@@ -1721,6 +1703,27 @@ mod tests {
             media[0].local_path
         );
         assert!(media[0].local_path.exists());
+    }
+
+    #[tokio::test]
+    async fn plan_counts_downloaded_media_once_as_skipped_existing() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        let bytes = BTreeMap::from([("photo:10".to_string(), b"demo".to_vec())]);
+        let gateway = FakeGateway::new(vec![vec![photo_message(10, 4)], vec![]], bytes.clone());
+        run_export(&gateway, &mut db, &config, export_options(&config))
+            .await
+            .expect("export");
+
+        let gateway = FakeGateway::new(vec![vec![photo_message(10, 4)], vec![]], bytes);
+        let report = run_export_plan(&gateway, &mut db, &config, export_options(&config), false)
+            .await
+            .expect("plan");
+
+        assert_eq!(report.media_found, 1);
+        assert_eq!(report.skipped_existing, 1);
+        assert_eq!(report.would_queue, 0);
     }
 
     #[tokio::test]
