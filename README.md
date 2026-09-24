@@ -194,7 +194,7 @@ Without `--keep-files`, `chats reset` also deletes the files it tracked.
 --out <DIR>                        output folder
 --only <KINDS> / --skip <KINDS>    media kinds to include or exclude
 --since-id <ID> / --until-id <ID>  message id range
---date-from <DATE> / --date-to <DATE>  date range, YYYY-MM-DD
+--date-from <DATE> / --date-to <DATE>  date range, YYYY-MM-DD in UTC
 --limit <N>                        stop after N messages
 --workers <N>                      max parallel downloads (default: CPU count)
 --rescan                           ignore the checkpoint and scan everything
@@ -245,7 +245,8 @@ downloads/
 ```
 
 The chat folder is a slug of the chat title. Year and month come from the
-message date.
+message date in UTC, so a message sent near local midnight can land in the
+neighboring day or month.
 
 The session and state databases live in your OS app-data folder, apart from
 the media. To put them elsewhere:
