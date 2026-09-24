@@ -193,19 +193,15 @@ pub fn sanitize_file_stem(value: &str) -> String {
     let mut output = String::with_capacity(stem.len());
     let mut prev_sep = false;
     for ch in stem.chars() {
-        let replacement = if ch.is_ascii_alphanumeric() {
+        if ch.is_alphanumeric() {
+            output.extend(ch.to_lowercase());
             prev_sep = false;
-            Some(ch.to_ascii_lowercase())
         } else if !prev_sep {
+            output.push('_');
             prev_sep = true;
-            Some('_')
-        } else {
-            None
-        };
-        if let Some(ch) = replacement {
-            output.push(ch);
         }
     }
+    // 40 chars stays under the 255-byte file name limit even for 4-byte characters.
     output.trim_matches('_').chars().take(40).collect()
 }
 
@@ -223,6 +219,14 @@ mod tests {
             classify_document_hints(Some("image/webp"), DocumentHints::default()),
             Some(MediaKind::ImageDocument)
         );
+    }
+
+    #[test]
+    fn keeps_non_latin_letters_in_original_file_stems() {
+        assert_eq!(sanitize_file_stem("Отчёт за 2024.pdf"), "отчёт_за_2024");
+        assert_eq!(sanitize_file_stem("写真 01.jpg"), "写真_01");
+        assert_eq!(sanitize_file_stem("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_file_stem("***.bin"), "");
     }
 
     #[test]
