@@ -13,7 +13,7 @@ use crate::shutdown::ShutdownFlag;
 use crate::storage::{CompleteExportPlan, Database, NewExportPlan, PersistedMediaItem};
 use crate::telegram::TelegramGateway;
 use crate::types::{CheckpointState, ExportOptions, MediaKind, MediaStatus};
-use futures_util::future::{AbortHandle, Abortable, FutureExt, LocalBoxFuture};
+use futures_util::future::{FutureExt, LocalBoxFuture};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use processor::{DownloadJob, MessageProcessor, MessageProcessorParams, execute_download};
 pub(crate) use progress::{
@@ -122,7 +122,7 @@ struct DownloadEvent<H> {
     final_retry_job: Option<DownloadJob<H>>,
 }
 
-type InFlightDownload<'a, H> = Abortable<LocalBoxFuture<'a, Result<DownloadEvent<H>>>>;
+type InFlightDownload<'a, H> = LocalBoxFuture<'a, Result<DownloadEvent<H>>>;
 
 struct DownloadPump<'a, G: TelegramGateway> {
     gateway: &'a G,
@@ -315,7 +315,6 @@ pub async fn run_export<G: TelegramGateway>(
     let mut pending_jobs = VecDeque::new();
     let mut final_retry_jobs = VecDeque::new();
     let mut in_flight = FuturesUnordered::new();
-    let mut abort_handles = Vec::<AbortHandle>::new();
     let mut frontiers = VecDeque::new();
     let mut durable_checkpoint = checkpoint.clone();
     let mut concurrency = AdaptiveConcurrency::new(config.download_concurrency);
@@ -358,7 +357,6 @@ pub async fn run_export<G: TelegramGateway>(
             &mut frontiers,
             &mut pending_jobs,
             &mut in_flight,
-            &mut abort_handles,
             &mut durable_checkpoint,
             &mut final_retry_jobs,
             &mut concurrency,
@@ -439,7 +437,6 @@ pub async fn run_export<G: TelegramGateway>(
                     database,
                     &mut pending_jobs,
                     &mut in_flight,
-                    &mut abort_handles,
                     &counters,
                     &concurrency,
                     frontiers.len(),
@@ -451,7 +448,6 @@ pub async fn run_export<G: TelegramGateway>(
                     database,
                     &mut pending_jobs,
                     &mut in_flight,
-                    &mut abort_handles,
                     &mut frontiers,
                     &mut counters,
                     &mut durable_checkpoint,
@@ -464,7 +460,6 @@ pub async fn run_export<G: TelegramGateway>(
                     database,
                     &mut pending_jobs,
                     &mut in_flight,
-                    &mut abort_handles,
                     &mut frontiers,
                     &mut counters,
                     &mut durable_checkpoint,
@@ -583,7 +578,6 @@ pub async fn run_export<G: TelegramGateway>(
                     database,
                     &mut pending_jobs,
                     &mut in_flight,
-                    &mut abort_handles,
                     &counters,
                     &concurrency,
                     frontiers.len(),
@@ -595,7 +589,6 @@ pub async fn run_export<G: TelegramGateway>(
                     database,
                     &mut pending_jobs,
                     &mut in_flight,
-                    &mut abort_handles,
                     &mut frontiers,
                     &mut counters,
                     &mut durable_checkpoint,
@@ -608,7 +601,6 @@ pub async fn run_export<G: TelegramGateway>(
                     database,
                     &mut pending_jobs,
                     &mut in_flight,
-                    &mut abort_handles,
                     &mut frontiers,
                     &mut counters,
                     &mut durable_checkpoint,
@@ -650,7 +642,6 @@ pub async fn run_export<G: TelegramGateway>(
                 database,
                 &mut pending_jobs,
                 &mut in_flight,
-                &mut abort_handles,
                 &counters,
                 &concurrency,
                 frontiers.len(),
@@ -662,7 +653,6 @@ pub async fn run_export<G: TelegramGateway>(
                 database,
                 &mut pending_jobs,
                 &mut in_flight,
-                &mut abort_handles,
                 &mut frontiers,
                 &mut counters,
                 &mut durable_checkpoint,
@@ -690,7 +680,6 @@ pub async fn run_export<G: TelegramGateway>(
                     database,
                     &mut pending_jobs,
                     &mut in_flight,
-                    &mut abort_handles,
                     &counters,
                     &concurrency,
                     frontiers.len(),
@@ -702,7 +691,6 @@ pub async fn run_export<G: TelegramGateway>(
                     database,
                     &mut pending_jobs,
                     &mut in_flight,
-                    &mut abort_handles,
                     &mut frontiers,
                     &mut counters,
                     &mut durable_checkpoint,
@@ -722,7 +710,7 @@ pub async fn run_export<G: TelegramGateway>(
     }
 
     if stop {
-        abort_in_flight_downloads(&mut in_flight, &mut abort_handles);
+        in_flight.clear();
     }
 
     progress.finish();
@@ -996,7 +984,6 @@ async fn replay_retryable_messages<'a, G: TelegramGateway>(
     frontiers: &mut VecDeque<MessageFrontier>,
     pending_jobs: &mut VecDeque<DownloadJob<G::MediaHandle>>,
     in_flight: &mut FuturesUnordered<InFlightDownload<'a, G::MediaHandle>>,
-    abort_handles: &mut Vec<AbortHandle>,
     durable_checkpoint: &mut crate::types::CheckpointState,
     final_retry_jobs: &mut VecDeque<DownloadJob<G::MediaHandle>>,
     concurrency: &mut AdaptiveConcurrency,
@@ -1031,14 +1018,13 @@ async fn replay_retryable_messages<'a, G: TelegramGateway>(
 
         while !pending_jobs.is_empty() || !in_flight.is_empty() {
             if pump.shutdown.is_requested() {
-                abort_in_flight_downloads(in_flight, abort_handles);
+                in_flight.clear();
                 break;
             }
             pump.maybe_start_downloads(
                 database,
                 pending_jobs,
                 in_flight,
-                abort_handles,
                 counters,
                 concurrency,
                 frontiers.len(),
@@ -1053,7 +1039,6 @@ async fn replay_retryable_messages<'a, G: TelegramGateway>(
                 database,
                 pending_jobs,
                 in_flight,
-                abort_handles,
                 frontiers,
                 counters,
                 durable_checkpoint,
@@ -1141,7 +1126,6 @@ impl<'a, G: TelegramGateway> DownloadPump<'a, G> {
         database: &mut Database,
         pending_jobs: &mut VecDeque<DownloadJob<G::MediaHandle>>,
         in_flight: &mut FuturesUnordered<InFlightDownload<'a, G::MediaHandle>>,
-        abort_handles: &mut Vec<AbortHandle>,
         counters: &ExportCounters,
         concurrency: &AdaptiveConcurrency,
         frontier_depth: usize,
@@ -1184,9 +1168,8 @@ impl<'a, G: TelegramGateway> DownloadPump<'a, G> {
             let config: &'a AppConfig = self.config;
             let shutdown = self.shutdown.clone();
             let retry_source = job.clone();
-            let (abort_handle, abort_registration) = AbortHandle::new_pair();
-            abort_handles.push(abort_handle);
-            in_flight.push(Abortable::new(
+            // Dropping an in-flight future cancels its download.
+            in_flight.push(
                 async move {
                     let record = execute_download(gateway, config, &shutdown, job).await?;
                     let failed = record.status == crate::types::MediaStatus::Failed;
@@ -1206,8 +1189,7 @@ impl<'a, G: TelegramGateway> DownloadPump<'a, G> {
                     })
                 }
                 .boxed_local(),
-                abort_registration,
-            ));
+            );
         }
 
         Ok(())
@@ -1219,7 +1201,6 @@ impl<'a, G: TelegramGateway> DownloadPump<'a, G> {
         database: &mut Database,
         pending_jobs: &mut VecDeque<DownloadJob<G::MediaHandle>>,
         in_flight: &mut FuturesUnordered<InFlightDownload<'a, G::MediaHandle>>,
-        abort_handles: &mut Vec<AbortHandle>,
         frontiers: &mut VecDeque<MessageFrontier>,
         counters: &mut ExportCounters,
         durable_checkpoint: &mut crate::types::CheckpointState,
@@ -1228,14 +1209,13 @@ impl<'a, G: TelegramGateway> DownloadPump<'a, G> {
     ) -> Result<()> {
         while frontiers.len() >= self.scan_ahead_messages {
             if self.shutdown.is_requested() {
-                abort_in_flight_downloads(in_flight, abort_handles);
+                in_flight.clear();
                 break;
             }
             self.maybe_start_downloads(
                 database,
                 pending_jobs,
                 in_flight,
-                abort_handles,
                 counters,
                 concurrency,
                 frontiers.len(),
@@ -1250,7 +1230,6 @@ impl<'a, G: TelegramGateway> DownloadPump<'a, G> {
                 database,
                 pending_jobs,
                 in_flight,
-                abort_handles,
                 frontiers,
                 counters,
                 durable_checkpoint,
@@ -1266,23 +1245,12 @@ impl<'a, G: TelegramGateway> DownloadPump<'a, G> {
     }
 }
 
-fn abort_in_flight_downloads<H>(
-    in_flight: &mut FuturesUnordered<InFlightDownload<'_, H>>,
-    abort_handles: &mut Vec<AbortHandle>,
-) {
-    for abort_handle in abort_handles.drain(..) {
-        abort_handle.abort();
-    }
-    let _dropped = std::mem::take(in_flight);
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn process_next_download<G: TelegramGateway>(
     gateway: &G,
     database: &mut Database,
     pending_jobs: &mut VecDeque<DownloadJob<G::MediaHandle>>,
     in_flight: &mut FuturesUnordered<InFlightDownload<'_, G::MediaHandle>>,
-    abort_handles: &mut Vec<AbortHandle>,
     frontiers: &mut VecDeque<MessageFrontier>,
     counters: &mut ExportCounters,
     durable_checkpoint: &mut crate::types::CheckpointState,
@@ -1293,16 +1261,12 @@ async fn process_next_download<G: TelegramGateway>(
 ) -> Result<()> {
     let maybe_result = tokio::select! {
         _ = shutdown.cancelled() => {
-            abort_in_flight_downloads(in_flight, abort_handles);
+            in_flight.clear();
             return Ok(());
         }
         result = in_flight.next() => result,
     };
     let Some(result) = maybe_result else {
-        return Ok(());
-    };
-    let Ok(result) = result else {
-        abort_handles.clear();
         return Ok(());
     };
     if matches!(result, Err(AppError::Interrupted(_))) {
@@ -1329,7 +1293,6 @@ async fn drain_ready_downloads<G: TelegramGateway>(
     database: &mut Database,
     pending_jobs: &mut VecDeque<DownloadJob<G::MediaHandle>>,
     in_flight: &mut FuturesUnordered<InFlightDownload<'_, G::MediaHandle>>,
-    abort_handles: &mut Vec<AbortHandle>,
     frontiers: &mut VecDeque<MessageFrontier>,
     counters: &mut ExportCounters,
     durable_checkpoint: &mut crate::types::CheckpointState,
@@ -1342,10 +1305,6 @@ async fn drain_ready_downloads<G: TelegramGateway>(
             break;
         };
         let Some(result) = maybe_result else {
-            break;
-        };
-        let Ok(result) = result else {
-            abort_handles.clear();
             break;
         };
         handle_download_result(
@@ -1794,7 +1753,6 @@ mod tests {
         let mut db = Database::open(&config.db_path).expect("db");
         let mut pending_jobs = VecDeque::new();
         let mut in_flight = FuturesUnordered::new();
-        let mut abort_handles = Vec::new();
         let mut frontiers = VecDeque::new();
         let mut counters = ExportCounters::default();
         let mut durable_checkpoint = CheckpointState {
@@ -1806,16 +1764,13 @@ mod tests {
         let mut final_retry_jobs = VecDeque::new();
         let mut concurrency = AdaptiveConcurrency::new(1);
         let shutdown = ShutdownFlag::default();
-        let (abort_handle, abort_registration) = AbortHandle::new_pair();
-        abort_handles.push(abort_handle);
-        in_flight.push(Abortable::new(
+        in_flight.push(
             async move {
                 std::future::pending::<()>().await;
                 unreachable!("pending download should be aborted")
             }
             .boxed_local(),
-            abort_registration,
-        ));
+        );
 
         let shutdown_trigger = shutdown.clone();
         tokio::spawn(async move {
@@ -1830,7 +1785,6 @@ mod tests {
                 &mut db,
                 &mut pending_jobs,
                 &mut in_flight,
-                &mut abort_handles,
                 &mut frontiers,
                 &mut counters,
                 &mut durable_checkpoint,
@@ -1845,7 +1799,6 @@ mod tests {
         .expect("processing should not fail");
 
         assert!(in_flight.is_empty());
-        assert!(abort_handles.is_empty());
     }
 
     #[tokio::test]
