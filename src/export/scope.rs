@@ -17,6 +17,22 @@ pub(crate) fn reached_limit(options: &ExportOptions, counters: &ExportCounters) 
         .is_some_and(|limit| counters.scanned_messages >= limit)
 }
 
+/// Unix time just past `--date-to`, used on the first history request so a scan starts
+/// at the date range instead of walking down from the newest message.
+pub(crate) fn history_max_date(options: &ExportOptions, offset_id: Option<i32>) -> Option<i32> {
+    if offset_id.is_some() {
+        return None;
+    }
+    let next_day = options.date_to?.succ_opt()?;
+    i32::try_from(
+        next_day
+            .and_time(chrono::NaiveTime::MIN)
+            .and_utc()
+            .timestamp(),
+    )
+    .ok()
+}
+
 pub(crate) fn validate_export_options(options: &ExportOptions) -> Result<()> {
     if let (Some(since_id), Some(until_id)) = (options.since_id, options.until_id)
         && since_id > until_id

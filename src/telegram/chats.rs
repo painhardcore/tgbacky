@@ -205,11 +205,15 @@ pub(super) async fn fetch_history_batch_impl(
     gateway: &RealTelegramGateway,
     chat: &PeerRef,
     offset_id: Option<i32>,
+    max_date: Option<i32>,
     batch_size: usize,
 ) -> Result<Vec<ScannedMessage<RealMediaHandle>>> {
     let mut iterator = gateway.client.iter_messages(*chat).limit(batch_size);
     if let Some(offset_id) = offset_id {
         iterator = iterator.offset_id(offset_id);
+    }
+    if let Some(max_date) = max_date {
+        iterator = iterator.max_date(max_date);
     }
 
     let mut messages = Vec::new();
