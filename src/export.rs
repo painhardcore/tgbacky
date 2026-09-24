@@ -1603,7 +1603,7 @@ mod tests {
             flood_sleep_threshold_secs: 5,
             jitter_ms: 0,
             download_concurrency: 3,
-            download_concurrency_origin: DownloadConcurrencyOrigin::Auto,
+            download_concurrency_origin: DownloadConcurrencyOrigin::Default,
             run_artifact_dir: download_dir.join("run-artifacts"),
             cleanup_stale_parts_on_start: false,
             stale_part_min_age_hours: 12,

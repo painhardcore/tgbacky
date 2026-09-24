@@ -509,7 +509,7 @@ fn export_credential_label(config: &AppConfig) -> String {
 
 fn format_worker_setting(workers: usize, origin: DownloadConcurrencyOrigin) -> String {
     match origin {
-        DownloadConcurrencyOrigin::Auto => format!("{workers} (auto-detected)"),
+        DownloadConcurrencyOrigin::Default => format!("{workers} (default)"),
         DownloadConcurrencyOrigin::Cli => format!("{workers} (from --workers)"),
     }
 }
