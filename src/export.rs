@@ -1761,6 +1761,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn plan_requeues_tracked_file_whose_size_changed() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = config(tempdir.path());
+        let mut db = Database::open(&config.db_path).expect("db");
+        let bytes = BTreeMap::from([("photo:10".to_string(), b"demo".to_vec())]);
+        let gateway = FakeGateway::new(vec![vec![photo_message(10, 4)], vec![]], bytes.clone());
+        run_export(&gateway, &mut db, &config, export_options(&config))
+            .await
+            .expect("export");
+        let path = db.list_media_for_chat(1).expect("media")[0]
+            .local_path
+            .clone();
+        tokio::fs::write(&path, b"truncated!")
+            .await
+            .expect("damage file");
+
+        let gateway = FakeGateway::new(vec![vec![photo_message(10, 4)], vec![]], bytes);
+        let report = run_export_plan(&gateway, &mut db, &config, export_options(&config), false)
+            .await
+            .expect("plan");
+
+        assert_eq!(report.skipped_existing, 0);
+        assert_eq!(report.would_queue, 1);
+    }
+
+    #[tokio::test]
     async fn waiting_download_aborts_when_shutdown_requested() {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let config = config(tempdir.path());
