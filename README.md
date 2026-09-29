@@ -66,7 +66,7 @@ Each archive holds the binary, `README.md`, `LICENSE`, and `env.example`.
 
 ### Build from source
 
-Needs Rust 1.85 or newer.
+Needs Rust 1.88 or newer.
 
 ```bash
 cargo install --path .

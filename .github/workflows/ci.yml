@@ -1,3 +1,4 @@
+# ci-standard: except make-entry — no Makefile yet; the cargo steps below are the whole check.
 name: CI
 
 on:
@@ -5,6 +6,13 @@ on:
     branches:
       - master
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   rust:
@@ -22,10 +30,10 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: cargo-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
