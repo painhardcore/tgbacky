@@ -454,26 +454,11 @@ fn write_local_credentials_file(path: &Path, credentials: &TelegramCredentials) 
     };
     let serialized = serde_json::to_string_pretty(&payload)?;
     let temp_path = path.with_extension("json.tmp");
-    fs::write(&temp_path, serialized)?;
-    set_private_permissions(&temp_path)?;
+    crate::fsutil::write_private_file(&temp_path, serialized.as_bytes())?;
     if path.exists() {
         fs::remove_file(path)?;
     }
     fs::rename(&temp_path, path)?;
-    set_private_permissions(path)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_private_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_private_permissions(_path: &Path) -> Result<()> {
     Ok(())
 }
 

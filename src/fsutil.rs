@@ -139,6 +139,50 @@ fn is_cross_device(error: &std::io::Error) -> bool {
         || matches!(error.raw_os_error(), Some(18))
 }
 
+/// Writes `contents` to a file that only the owner can read or write.
+pub fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = private_open_options().truncate(true).open(path)?;
+    restrict_to_owner(path)?;
+    file.write_all(contents)?;
+    Ok(())
+}
+
+/// Makes a SQLite database and its WAL/SHM files owner-only. The database file is
+/// created first because SQLite copies its mode to the sidecar files it creates.
+pub fn restrict_sqlite_files(path: &Path) -> Result<()> {
+    private_open_options().open(path)?;
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file_name = path.as_os_str().to_owned();
+        file_name.push(suffix);
+        let file = PathBuf::from(file_name);
+        if file.exists() {
+            restrict_to_owner(&file)?;
+        }
+    }
+    Ok(())
+}
+
+fn private_open_options() -> std::fs::OpenOptions {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+}
+
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +195,48 @@ mod tests {
             "пятисотые_на_проде"
         );
         assert_eq!(slugify_chat_title("***"), "chat");
+    }
+
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restricts_new_and_existing_sqlite_files_to_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("state.db");
+        let wal = dir.path().join("state.db-wal");
+        std::fs::write(&wal, b"").expect("wal");
+        std::fs::set_permissions(&wal, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        restrict_sqlite_files(&db).expect("restrict");
+
+        assert_eq!(mode(&db), 0o600);
+        assert_eq!(mode(&wal), 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_file_is_owner_only_even_when_it_existed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("secret.json");
+        std::fs::write(&path, b"old contents that are longer").expect("seed");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        write_private_file(&path, b"new").expect("write");
+
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(std::fs::read(&path).expect("read"), b"new");
     }
 }
