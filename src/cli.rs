@@ -274,8 +274,10 @@ struct ExportArgs {
     only_media: Option<String>,
     #[arg(long = "skip", value_name = "KINDS")]
     skip_media: Option<String>,
+    /// Oldest message date to include, YYYY-MM-DD in UTC
     #[arg(long)]
     date_from: Option<chrono::NaiveDate>,
+    /// Newest message date to include, YYYY-MM-DD in UTC
     #[arg(long)]
     date_to: Option<chrono::NaiveDate>,
     #[arg(long)]
@@ -309,8 +311,10 @@ struct ExportPlanArgs {
     since_id: Option<i32>,
     #[arg(long)]
     until_id: Option<i32>,
+    /// Oldest message date to include, YYYY-MM-DD in UTC
     #[arg(long)]
     date_from: Option<chrono::NaiveDate>,
+    /// Newest message date to include, YYYY-MM-DD in UTC
     #[arg(long)]
     date_to: Option<chrono::NaiveDate>,
     #[arg(long)]
