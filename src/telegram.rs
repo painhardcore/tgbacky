@@ -103,7 +103,7 @@ impl RealTelegramGateway {
             },
         );
         let runner_task = tokio::spawn(async move {
-            let _ = runner.run().await;
+            runner.run().await;
         });
 
         Ok(Self {

@@ -136,7 +136,7 @@ pub async fn run(config: &AppConfig, command: VerifyCommand) -> Result<()> {
     let output_root = command
         .out_dir
         .as_deref()
-        .map(normalize_for_prefix)
+        .map(crate::fsutil::normalize_path)
         .transpose()?;
 
     let mut report = verify_records(records, output_root.as_deref(), command.deep).await?;
@@ -218,7 +218,7 @@ async fn verify_records(
 
     for record in records {
         if let Some(root) = output_root {
-            let local_path = normalize_for_prefix(&record.local_path)?;
+            let local_path = crate::fsutil::normalize_path(&record.local_path)?;
             if !local_path.starts_with(root) {
                 report.outside_output_root += 1;
                 continue;
@@ -365,33 +365,6 @@ async fn verify_records(
     }
 
     Ok(report)
-}
-
-fn normalize_for_prefix(path: &Path) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    if absolute.exists() {
-        Ok(absolute.canonicalize()?)
-    } else {
-        Ok(normalize_lexically(absolute))
-    }
-}
-
-fn normalize_lexically(path: PathBuf) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
 }
 
 #[cfg(test)]

@@ -58,7 +58,6 @@ pub(super) fn map_message(message: Message) -> ScannedMessage<RealMediaHandle> {
                     });
                 }
             }
-            Media::Sticker(_) => {}
             _ => {}
         }
     }

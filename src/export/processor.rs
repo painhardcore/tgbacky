@@ -9,7 +9,7 @@ use crate::config::AppConfig;
 use crate::error::{AppError, Result};
 use crate::fsutil::{
     build_media_directory, cleanup_file_if_exists, compute_sha256_async, ensure_parent_dir,
-    move_atomic, slugify_chat_title,
+    move_atomic, slugify_chat_title, temp_sidecar_path,
 };
 use crate::media::{build_filename, choose_extension, stable_suffix};
 use crate::shutdown::ShutdownFlag;
@@ -145,7 +145,7 @@ impl<'a> MessageProcessor<'a> {
         let final_path = self
             .resolve_available_target_path(database, &base_path, &media.telegram_media_key)
             .await?;
-        let temp_path = temp_path_for(&final_path, &self.config.temp_extension);
+        let temp_path = temp_sidecar_path(&final_path, &self.config.temp_extension);
 
         Ok(MediaPlan::Queue(DownloadJob {
             message_id: message.message_id,
@@ -336,14 +336,6 @@ async fn download_with_retry<G: TelegramGateway>(
             }
         }
     }
-}
-
-fn temp_path_for(final_path: &Path, temp_extension: &str) -> PathBuf {
-    let file_name = final_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("download");
-    final_path.with_file_name(format!("{file_name}{temp_extension}"))
 }
 
 async fn validate_download_size(path: &Path, expected_size_bytes: Option<i64>) -> Result<()> {

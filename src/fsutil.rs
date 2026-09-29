@@ -67,6 +67,31 @@ pub async fn cleanup_file_if_exists(path: &Path) -> Result<()> {
     }
 }
 
+/// Absolute form of `path`: canonical when it exists, otherwise with `.` and `..` resolved
+/// lexically, so paths compare equal regardless of the working directory.
+pub fn normalize_path(path: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    if absolute.exists() {
+        Ok(absolute.canonicalize()?)
+    } else {
+        Ok(normalize_lexically(absolute))
+    }
+}
+
+fn normalize_lexically(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 pub fn temp_sidecar_path(final_path: &Path, temp_extension: &str) -> PathBuf {
     let file_name = final_path
         .file_name()
@@ -238,5 +263,12 @@ mod tests {
 
         assert_eq!(mode(&path), 0o600);
         assert_eq!(std::fs::read(&path).expect("read"), b"new");
+    }
+
+    #[test]
+    fn normalizes_missing_relative_paths_lexically() {
+        let normalized = normalize_path(Path::new("no-such-dir/./a/../b")).expect("normalize");
+        let expected = std::env::current_dir().expect("cwd").join("no-such-dir/b");
+        assert_eq!(normalized, expected);
     }
 }
