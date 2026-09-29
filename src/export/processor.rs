@@ -108,7 +108,7 @@ impl<'a> MessageProcessor<'a> {
         )? && matches!(
             existing.status,
             MediaStatus::Downloaded | MediaStatus::SkippedExisting
-        ) && let Some(verified) = self.verify_existing_record(&existing).await?
+        ) && existing_file_matches(&existing).await?
         {
             return Ok(MediaPlan::Skip(PersistedMediaItem {
                 chat_id: self.chat_id,
@@ -117,7 +117,7 @@ impl<'a> MessageProcessor<'a> {
                 kind: media.kind,
                 telegram_media_key: media.telegram_media_key.clone(),
                 mime_type: media.mime_type.clone(),
-                file_size_bytes: Some(verified.file_size_bytes),
+                file_size_bytes: existing.file_size_bytes,
                 local_path: existing.local_path,
                 sha256: existing.sha256,
                 status: MediaStatus::SkippedExisting,
@@ -167,24 +167,6 @@ impl<'a> MessageProcessor<'a> {
             },
             temp_path,
         }))
-    }
-
-    async fn verify_existing_record(
-        &self,
-        record: &StoredMediaRecord,
-    ) -> Result<Option<VerifiedExistingRecord>> {
-        if !record.local_path.exists() {
-            return Ok(None);
-        }
-        let Some(expected_sha) = record.sha256.as_deref() else {
-            return Ok(None);
-        };
-        let actual_sha = compute_sha256_async(&record.local_path).await?;
-        if actual_sha != expected_sha {
-            return Ok(None);
-        }
-        let file_size_bytes = i64_file_size(tokio::fs::metadata(&record.local_path).await?.len())?;
-        Ok(Some(VerifiedExistingRecord { file_size_bytes }))
     }
 
     async fn resolve_available_target_path(
@@ -238,8 +220,16 @@ struct DownloadedFile {
     sha256: String,
 }
 
-struct VerifiedExistingRecord {
-    file_size_bytes: i64,
+/// Trusts a tracked file when it exists with the recorded size. Hashing here re-read the
+/// whole archive on every `export plan`, `--rescan`, and bounded export; `verify --deep`
+/// is the place for content checks.
+async fn existing_file_matches(record: &StoredMediaRecord) -> Result<bool> {
+    let metadata = match tokio::fs::metadata(&record.local_path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(metadata.is_file() && record.file_size_bytes == Some(i64_file_size(metadata.len())?))
 }
 
 pub(crate) async fn execute_download<G: TelegramGateway>(

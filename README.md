@@ -196,7 +196,7 @@ Without `--keep-files`, `chats reset` also deletes the files it tracked.
 --since-id <ID> / --until-id <ID>  message id range
 --date-from <DATE> / --date-to <DATE>  date range, YYYY-MM-DD in UTC
 --limit <N>                        stop after N messages
---workers <N>                      max parallel downloads (default: CPU count)
+--workers <N>                      max parallel downloads (default: 4)
 --rescan                           ignore the checkpoint and scan everything
 --verbose-progress                 more detail in the progress line
 --json-report                      print a JSON report at the end

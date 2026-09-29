@@ -1135,7 +1135,7 @@ mod tests {
             flood_sleep_threshold_secs: 5,
             jitter_ms: 0,
             download_concurrency: 2,
-            download_concurrency_origin: DownloadConcurrencyOrigin::Auto,
+            download_concurrency_origin: DownloadConcurrencyOrigin::Default,
             cleanup_stale_parts_on_start: false,
             stale_part_min_age_hours: 12,
             verbose_dependency_logs: false,
